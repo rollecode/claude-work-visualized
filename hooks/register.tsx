@@ -5,7 +5,7 @@ import type { Activity, Clip, Ghost, Op, TreeEntry, TurnInfo } from '../types'
 import { MAX_BYTES, clipOf, codeLines, codeRule, currentClip, enqueue, isClipDone } from './code'
 import {
   COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
-  buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix,
+  buildRows, classifyBash, counted, mentionsOf, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
   placeOf, remotePath, scrollTo, staleKeys, statusLine, summaryLines, withPath, withoutPath,
 } from './model'
 import type { FolderMemory, Seg, Target } from './model'
@@ -18,7 +18,7 @@ const FRAME_MS = 33 // ~30 fps while anything moves, the terminal's cap for a sh
 const POLL_MS = 1500 // how often the project is rescanned for changes made outside tool calls
 const SPLIT_COLUMNS = 96 // from this wide the code view sits beside the tree, else under it
 const EDITORS = new Set(['Edit', 'MultiEdit', 'Write'])
-const MAX_REPLAYS = 3 // files of one tool call the code view replays
+const MAX_REPLAYS = 4 // files of one tool call the code view checks and replays
 const PANE_BG = '#000000'
 
 const tree = atom({ plugin: 'work-visualized', key: 'tree' } as const, [] as TreeEntry[])
@@ -31,6 +31,7 @@ const clips = atom({ plugin: 'work-visualized', key: 'clips' } as const, [] as C
 // Drawing memory only: a reload starts these over, harmlessly.
 const folders: FolderMemory = new Map()
 let scroll = 0
+let codeScroll = 0
 let animateUntil = 0
 let isWatching = true // mirrors the watching atom for synchronous checks
 let home: string | undefined
@@ -148,11 +149,23 @@ async function targetsOf($: EngineInterface, tool: string, input: Record<string,
 }
 
 /** The file's text before an edit: empty for a new file, undefined when it can't be replayed. */
-async function textBefore($: EngineInterface, path: string, target: Located): Promise<string | undefined> {
-  if (target.op === 'create') return ''
+async function textBefore($: EngineInterface, path: string, target: Target): Promise<string | undefined> {
   const stat = await $.fs.stat(path).catch(() => undefined)
-  if (stat === undefined || stat.size > MAX_BYTES) return undefined
+  if (stat === undefined) return target.op === 'create' ? '' : undefined
+  if (stat.kind !== 'file' || stat.size > MAX_BYTES) return undefined
   return $.fs.read(path).catch(() => undefined)
+}
+
+/** The files whose change the code view replays: an editor's, or those a shell command writes or names. */
+async function replaysOf($: EngineInterface, tool: string, input: Record<string, unknown>, targets: readonly Located[], cwd: string): Promise<Located[]> {
+  if (!EDITORS.has(tool) && tool !== 'Bash') return []
+  const written = targets.filter(t => (t.op === 'edit' || t.op === 'create') && t.file !== undefined)
+  const command = tool === 'Bash' && typeof input['command'] === 'string' ? input['command'] : ''
+  const named = mentionsOf(command)
+    .map(w => placeOf(cwd, w, home))
+    .filter((p): p is { file: string; path: string } => p !== undefined && !written.some(t => t.file === p.file))
+    .map((p): Located => ({ op: 'view', ...p }))
+  return [...written, ...named].slice(0, MAX_REPLAYS)
 }
 
 function setStatus($: EngineInterface, text: string | undefined) {
@@ -299,10 +312,7 @@ export const register: Register = on => {
       if (first) setStatus($, `${ICON[first.op]} ${LABEL[first.op]} ${first.path}`)
     }
 
-    // Files whose change the code view replays: an editor's, or what a shell command writes.
-    const replays = EDITORS.has(tool) || tool === 'Bash'
-      ? targets.filter(t => (t.op === 'edit' || t.op === 'create') && t.file !== undefined).slice(0, MAX_REPLAYS)
-      : []
+    const replays = await replaysOf($, tool, e as unknown as Record<string, unknown>, targets, cwd)
     const befores = await Promise.all(replays.map(t => textBefore($, t.file ?? '', t)))
 
     const ran = await next(e)
@@ -342,7 +352,13 @@ export const register: Register = on => {
       // Read back from disk, so a formatter's changes show as well.
       const after = await $.fs.read(t.file ?? '').catch(() => undefined)
       const clip = after === undefined ? undefined : clipOf(t.path, before, after, endedAt)
-      if (clip !== undefined) await update($, clips, list => enqueue(list, clip, endedAt))
+      if (clip === undefined) continue
+      await update($, clips, list => enqueue(list, clip, endedAt))
+      // A file the command only named, changed after all: an edit, so the tree shows it too.
+      if (targets.some(x => x.path === t.path)) continue
+      await update($, tree, list => withPath(list, t.path, false))
+      await update($, activity, map => ({ ...map, [t.path]: { op: 'edit' as const, startedAt, endedAt, running: 0 } }))
+      await update($, turn, info => counted(info, 'edit', t.path))
     }
     if (mutates) {
       // Deletes become ghosts through the rescan, so they play their exit.
@@ -384,10 +400,12 @@ export const register: Register = on => {
       : isSplit
         ? height - 1
         : Math.max(3, Math.min(Math.max(clip.before.length, clip.after.length) + 2, Math.floor(height * 0.45)))
+    const codeView = clip === undefined ? { lines: [], scroll: 0 } : codeLines(clip, now, codeColumns, codeRows, codeScroll)
+    codeScroll = codeView.scroll
     const code = clip !== undefined && (
       <Box flexDirection="column" width={codeColumns} backgroundColor={PANE_BG}>
         {line(codeRule(clip, codeColumns), 'cr')}
-        {codeLines(clip, now, codeColumns, codeRows).map((segs, i) => line(segs, `c${i}`))}
+        {codeView.lines.map((segs, i) => line(segs, `c${i}`))}
       </Box>
     )
 
@@ -424,7 +442,7 @@ export const register: Register = on => {
 
       return (
         <Box flexDirection="column" width={columns} flexGrow={1} backgroundColor={PANE_BG}>
-          {line(headerLine(now, focus !== undefined || info.phase === 'working', root), 'h')}
+          {line(headerLine(now, focus !== undefined || info.phase === 'working', root, remoteOf(act, now)), 'h')}
           {line(statusLine(act, info, now, fileCount, columns), 's')}
           {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1')}
           {rows.length === 0 ? line([{ t: ' scanning…', c: MUTED }], 'empty') : visible.map(r => line(r.segs, r.key))}

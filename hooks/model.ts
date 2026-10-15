@@ -127,11 +127,12 @@ const VIEWERS = new Set([
 ])
 const DELETERS = new Set(['rm', 'unlink', 'rmdir', 'trash', 'shred'])
 
+/** Shell words: quoted parts join the text around them (`K="-i x"` is one word), quotes removed. */
 function tokenize(segment: string): string[] {
   const out: string[] = []
-  const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g
+  const re = /(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s"']+)+/g
   for (let m = re.exec(segment); m !== null; m = re.exec(segment)) {
-    out.push(m[1] ?? m[2] ?? m[3] ?? '')
+    out.push(m[0].replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_, d?: string, q?: string) => d ?? q ?? ''))
   }
   return out
 }
@@ -142,14 +143,36 @@ function tokenize(segment: string): string[] {
  * misses, so it only has to be right about what to animate while it runs.
  */
 export function classifyBash(command: string): Target[] {
+  return readCommand(command).targets
+}
+
+/**
+ * Words in a command that look like local files, with `cd` applied: the
+ * files a script may change without saying so (`python3 - <<EOF` writing
+ * `'CHANGELOG.md'`), which the code view checks before and after it runs.
+ */
+export function mentionsOf(command: string): string[] {
+  return [...new Set(readCommand(command).mentions)]
+}
+
+const looksLikeFile = (w: string) =>
+  /^[\w.~\/@+-]+$/.test(w) && /[^./]\.[A-Za-z][A-Za-z0-9]*$|\//.test(w) && !w.startsWith('-') && !/^[\d.]+$/.test(w) && w !== '.' && w !== '..'
+
+function readCommand(command: string): { targets: Target[]; mentions: string[] } {
   const targets: Target[] = []
+  const mentions: string[] = []
   // What `cd` and `NAME=value` set earlier in the command, for the paths after them.
   let dir: string | undefined
   const vars = new Map<string, string>()
   const within = (path: string) => (dir === undefined || path.startsWith('/') || path.startsWith('~') ? path : `${dir}/${path}`)
-  for (const { text: segment, heredoc } of segmentsOf(command)) {
+  for (const { text: segment, heredoc } of unrolled(segmentsOf(command))) {
     const start = targets.length
     let words = tokenize(segment.trim()).map(w => expand(w, vars))
+    const local = !/^\s*(\S+=\S*\s+)*(sudo\s+)?ssh\s/.test(segment)
+    if (local) {
+      for (const w of words) if (looksLikeFile(w)) mentions.push(within(w))
+      for (const q of (heredoc ?? '').match(/(["'])[^"'\n]+\1/g) ?? []) if (looksLikeFile(q.slice(1, -1))) mentions.push(within(q.slice(1, -1)))
+    }
     // Redirections: `> file` writes, `< file` reads.
     const rest: string[] = []
     for (let i = 0; i < words.length; i++) {
@@ -227,7 +250,7 @@ export function classifyBash(command: string): Target[] {
     }
     relocate(targets, start, within)
   }
-  return targets
+  return { targets, mentions }
 }
 
 /** Puts this segment's local paths under the folder `cd` moved to. */
@@ -335,6 +358,35 @@ function segmentsOf(command: string): Segment[] {
   return out
 }
 
+const MAX_LOOP_VALUES = 12
+
+/** `for x in a b; do …; done` as its body once per value, each after `x=value`. */
+function unrolled(segments: readonly Segment[]): Segment[] {
+  const out: Segment[] = []
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i] as Segment
+    const head = /^\s*for\s+(\w+)\s+in\s+(.*)$/.exec(seg.text)
+    if (head === null) {
+      out.push(seg)
+      continue
+    }
+    // The body runs to the matching `done`, nested loops included.
+    const body: Segment[] = []
+    let depth = 1
+    for (i++; i < segments.length; i++) {
+      const s = segments[i] as Segment
+      if (/^\s*for\s/.test(s.text)) depth++
+      if (/^\s*done\b/.test(s.text) && --depth === 0) break
+      body.push({ ...s, text: s.text.replace(/^\s*do\s+/, '') })
+    }
+    const name = head[1] ?? ''
+    for (const value of tokenize(head[2] ?? '').slice(0, MAX_LOOP_VALUES)) {
+      out.push({ text: `${name}='${value.replace(/'/g, '')}'` }, ...unrolled(body))
+    }
+  }
+  return out
+}
+
 /** `ssh [options] host [command]`: what the command does, on that host. */
 function sshTargets(args: readonly string[], heredoc: string | undefined): Target[] {
   let i = 0
@@ -363,14 +415,14 @@ function copyTargets(operands: readonly string[]): Target[] {
   return [...operands.slice(0, -1).map(p => side(p, 'view')), side(operands[operands.length - 1] ?? '', 'create')]
 }
 
+/** `user@host` or `host`, as typed, so the tree says which account on which machine. */
 function hostName(raw: string): string | undefined {
-  const name = raw.slice(raw.lastIndexOf('@') + 1)
-  return /^[\w.-]+$/.test(name) ? name : undefined
+  return /^([\w.-]+@)?[\w.-]+$/.test(raw) ? raw : undefined
 }
 
 /** A remote file as a tree path: `host:` is its top folder, `~` the remote home. */
 export function remotePath(host: string, raw: string): string | undefined {
-  let p = raw.trim()
+  let p = raw.trim().replace(/^\$\{?HOME\}?(?=\/|$)/, '~')
   if (p === '' || /[*?$`(){}]/.test(p)) return undefined
   const isAbsolute = p.startsWith('/')
   if (p === '~' || p.startsWith('~/')) p = p.slice(1)
@@ -388,7 +440,7 @@ export function remotePath(host: string, raw: string): string | undefined {
 
 /** Whether a tree path is one the scan never sees: on another host, or outside the session folder. */
 export function isUnscanned(path: string): boolean {
-  return /^[\w.~-]+:\//.test(path)
+  return /^[\w.~@-]+:\//.test(path)
 }
 
 /** Top folders for files outside the session folder: under the home folder, and anywhere else. */
@@ -402,7 +454,7 @@ export const DISK_ROOT = 'local:'
  * can't be a path, or an ignored folder.
  */
 export function placeOf(root: string, raw: string, home: string | undefined): { file: string; path: string } | undefined {
-  let p = raw.trim()
+  let p = raw.trim().replace(/^\$\{?HOME\}?(?=\/|$)/, '~')
   if (p === '' || /[*?$`(){}]/.test(p)) return undefined
   if (home !== undefined && (p === '~' || p.startsWith('~/'))) p = home + p.slice(1)
   if (p.startsWith('~')) return undefined
@@ -837,14 +889,31 @@ export function scrollTo(current: number, rows: readonly Row[], focus: string | 
 // Glyphs every common monospace font has, so the spark never falls back to a wider font.
 const SPARK = ['·', '∙', '•', '◆', '✶', '◆', '•', '∙']
 
-/** `✶ work-map ~/project`, the spark turning while Claude works. */
-export function headerLine(now: number, isWorking: boolean, root: string): Seg[] {
+/** `✶ work-map ~/project → user@host`, the spark turning while Claude works, the host while it works remotely. */
+export function headerLine(now: number, isWorking: boolean, root: string, remote?: string): Seg[] {
   const spark = isWorking ? SPARK[Math.floor(now / 110) % SPARK.length] ?? '✶' : '✶'
-  return [
+  const segs: Seg[] = [
     { t: spark, c: isWorking ? mix(CLAUDE, '#ffd2bf', pulse(now, 900) * 0.6) : CLAUDE, b: true },
     { t: ' work-map', c: BASE, b: true },
     { t: ` ~/${root}`, c: MUTED },
   ]
+  if (remote !== undefined) segs.push({ t: ' → ', c: MUTED }, { t: remote, c: COLOR.view, b: true })
+  return segs
+}
+
+/** The host Claude most recently worked on over ssh, while that is still recent. */
+export function remoteOf(activity: Readonly<Record<string, Activity>>, now: number): string | undefined {
+  let best: string | undefined
+  let at = -Infinity
+  for (const [path, a] of Object.entries(activity)) {
+    const host = /^([\w.@-]+):\//.exec(path)?.[1]
+    if (host === undefined || `${host}:` === DISK_ROOT || levelOf(a, now) === 'none' || levelOf(a, now) === 'trail') continue
+    if (a.startedAt >= at) {
+      best = host
+      at = a.startedAt
+    }
+  }
+  return best
 }
 
 /** The prompt line: what Claude is doing right now, with a live cursor. */

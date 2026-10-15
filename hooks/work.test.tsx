@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, placeOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
+import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, mentionsOf, placeOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
 import type { FolderMemory } from './model'
 
 // The test environment has it; the engine's typings leave it out.
@@ -181,8 +181,8 @@ test('a Read shows in the pane as Claude viewing that file', async ($, on) => {
 
 test('commands run over ssh, scp and rsync are read as work on that host', async () => {
   expect(classifyBash("ssh -p 2222 -i ~/.ssh/key deploy@web1 'sudo sed -i s/a/b/ /etc/nginx/nginx.conf && rm -f /tmp/old.log'")).toEqual([
-    { op: 'edit', path: '/etc/nginx/nginx.conf', host: 'web1' },
-    { op: 'delete', path: '/tmp/old.log', host: 'web1' },
+    { op: 'edit', path: '/etc/nginx/nginx.conf', host: 'deploy@web1' },
+    { op: 'delete', path: '/tmp/old.log', host: 'deploy@web1' },
   ])
   expect(classifyBash('ssh web1 cat /var/log/app.log | grep error > errors.txt')).toEqual([
     { op: 'view', path: '/var/log/app.log', host: 'web1' },
@@ -195,12 +195,12 @@ test('commands run over ssh, scp and rsync are read as work on that host', async
   expect(classifyBash("ssh web1 'cat > /etc/motd' <<EOF\nrm everything\nEOF")).toEqual([{ op: 'edit', path: '/etc/motd', host: 'web1' }])
   expect(classifyBash('scp dist/app.tar.gz root@web2:/opt/app.tar.gz')).toEqual([
     { op: 'view', path: 'dist/app.tar.gz' },
-    { op: 'create', path: '/opt/app.tar.gz', host: 'web2' },
+    { op: 'create', path: '/opt/app.tar.gz', host: 'root@web2' },
   ])
   expect(classifyBash('cat > notes.md <<EOF\nrm -rf /\nEOF')).toEqual([{ op: 'edit', path: 'notes.md' }])
   expect(remotePath('web1', '/etc/./nginx/../hosts')).toBe('web1:/etc/hosts')
   expect(remotePath('web1', 'logs/app.log')).toBe('web1:/~/logs/app.log')
-  expect(remotePath('web1', '$HOME/x')).toBe(undefined)
+  expect(remotePath('web1', '$HOME/x')).toBe('web1:/~/x')
 })
 
 test('a file deleted over ssh shows under its host and plays its exit', async ($, on) => {
@@ -230,6 +230,7 @@ test('a file deleted over ssh shows under its host and plays its exit', async ($
   })
   const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
   expect(shown).toContain('web1:/')
+  expect(shown).toContain('→ web1')
   expect(shown).toContain('app.conf')
   expect(shown).toContain('old.log')
   expect(shown).toContain('package.json')
@@ -261,6 +262,24 @@ test('paths outside the session folder go under the home folder or the disk', as
   expect(placeOf('/home/u/site', '$F', '/home/u')).toBe(undefined)
 })
 
+test('a for loop runs its body once per value', async () => {
+  const command = [
+    "cd ~/site && python3 - <<'EOF'",
+    "p='CHANGELOG.md'",
+    "open(p,'w').write(open(p).read())",
+    'EOF',
+    'K="-i $HOME/.ssh/id_rsa -o IdentitiesOnly=yes"; for h in web1 web2; do scp -q $K CHANGELOG.md $h:~/site/CHANGELOG.md && printf "%s ok " $h; done; echo',
+  ].join('\n')
+  expect(classifyBash(command)).toEqual([
+    { op: 'view', path: '~/site/CHANGELOG.md' },
+    { op: 'create', path: '~/site/CHANGELOG.md', host: 'web1' },
+    { op: 'view', path: '~/site/CHANGELOG.md' },
+    { op: 'create', path: '~/site/CHANGELOG.md', host: 'web2' },
+  ])
+  expect(remotePath('web1', '$HOME/x.log')).toBe('web1:/~/x.log')
+  expect(placeOf('/home/u/site', '$HOME/notes.md', '/home/u')).toEqual({ file: '/home/u/notes.md', path: '~:/notes.md' })
+})
+
 test('a sed edit in another project shows in the tree and replays in the code view', async ($, on) => {
   mock.clock(on, { now: 10_000 })
   mock.store(on)
@@ -273,8 +292,8 @@ test('a sed edit in another project shows in the tree and replays in the code vi
   on('fs.list', ($, e) =>
     ({ value: e.path === ROOT ? [{ name: 'package.json', kind: 'file', size: 1, mtimeMs: 1, isLink: false }] : [] }) as never,
   )
-  on('fs.stat', ($, e) => (disk[e.path] === undefined ? { error: 'missing' } : { value: { kind: 'file', size: disk[e.path]?.length ?? 0, mtimeMs: 1, isLink: false } }) as never)
-  on('fs.read', ($, e) => (disk[e.path] === undefined ? { error: 'missing' } : { value: disk[e.path] }) as never)
+  on('fs.stat', ($, e) => (disk[e.path] === undefined ? { deny: 'missing' } : { value: { kind: 'file', size: disk[e.path]?.length ?? 0, mtimeMs: 1, isLink: false } }) as never)
+  on('fs.read', ($, e) => (disk[e.path] === undefined ? { deny: 'missing' } : { value: disk[e.path] }) as never)
   on('tool.call', { tool: 'Bash' }, () => {
     disk['/home/u/other/inc/hooks.php'] = '<?php\n$id = $term->term_id ?? null;\n'
     return { result: { stdout: '', stderr: '', interrupted: false }, isError: true } as never
@@ -295,5 +314,48 @@ test('a sed edit in another project shows in the tree and replays in the code vi
   expect(shown).toContain('~:/')
   expect(shown).toContain('hooks.php')
   expect(shown).toContain('~:/other/inc/hooks.php:1')
+  await ui.unmount()
+})
+
+test('files a script names are checked, so a heredoc that rewrites one is caught', async () => {
+  const command = ["cd ~/site && python3 - <<'EOF'", "p='CHANGELOG.md'", "open(p,'w').write(open(p).read())", 'EOF', 'grep -c x CHANGELOG.md; echo v1.2.3'].join('\n')
+  expect(mentionsOf(command)).toEqual(['~/site', '~/site/CHANGELOG.md'])
+  expect(mentionsOf("ssh web1 'cat /etc/hosts'")).toEqual([])
+})
+
+test('a changelog rewritten by a python heredoc replays in the code view', async ($, on) => {
+  mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  mock.env(on, { HOME: '/home/u' })
+  const disk: Record<string, string> = { '/home/u/site/CHANGELOG.md': '### alpha\n\n* beta\n' }
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', ($, e) =>
+    ({ value: e.path === ROOT ? [{ name: 'package.json', kind: 'file', size: 1, mtimeMs: 1, isLink: false }] : [] }) as never,
+  )
+  on('fs.stat', ($, e) => (disk[e.path] === undefined ? { deny: 'missing' } : { value: { kind: 'file', size: disk[e.path]?.length ?? 0, mtimeMs: 1, isLink: false } }) as never)
+  on('fs.read', ($, e) => (disk[e.path] === undefined ? { deny: 'missing' } : { value: disk[e.path] }) as never)
+  on('tool.call', { tool: 'Bash' }, () => {
+    disk['/home/u/site/CHANGELOG.md'] = '### alpha\n\n* alpha: Guard a missing query arg\n* beta\n'
+    return { result: { stdout: '', stderr: '', interrupted: false } } as never
+  })
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  const command = ["cd ~/site && python3 - <<'EOF'", "p='CHANGELOG.md'", "s=open(p).read()", "open(p,'w').write(s)", 'EOF'].join('\n')
+  await $.tool.call({ tool: 'Bash', command } as never)
+
+  const ui = await $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 34 }, view: {} },
+  })
+  const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  expect(shown).toContain('~:/site/CHANGELOG.md:1')
+  expect(shown).toContain('CHANGELOG.md')
   await ui.unmount()
 })

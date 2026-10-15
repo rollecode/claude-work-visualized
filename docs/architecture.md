@@ -67,7 +67,9 @@ Only words that name a path already in the tree count (except creates), so a pat
 never mistaken for a file.
 
 `cd` and `NAME=value` earlier in a command carry to the commands after them, so
-`cd ~/site && F=a.php && sed -i '' -e … $F` names `~/site/a.php`.
+`cd ~/site && F=a.php && sed -i '' -e … $F` names `~/site/a.php`. `placeOf()` puts a path
+outside the session folder under `~:/` (the home folder) or `local:/`; like remote paths, those
+are checked with `$.fs.stat` instead of the scan and kept across rescans.
 
 Commands are split outside quotes, and a heredoc's body is kept apart from the commands, so
 `ssh host 'a && b'` stays one command and the text a heredoc writes is never read as commands.
@@ -89,8 +91,9 @@ delete becomes a ghost as soon as the command succeeds.
 replay follow [Code Viz](https://github.com/Waterside-Group/code-viz)'s viewer (MIT).
 
 1. **Before the tool runs**, the `tool.call` hook reads the file (empty for a new one), skipping
-   files over 256 KB. For a shell command, that is up to 3 files it writes (`sed -i`, `>`, `tee`),
-   replayed even when a later step of the command fails.
+   files over 256 KB. For a shell command that is up to 4 files: those it writes (`sed -i`, `>`,
+   `tee`), then those `mentionsOf()` finds named anywhere in it, a heredoc's quoted strings
+   included. They are replayed even when a later step of the command fails.
 2. **After it succeeds**, the file is read again from disk, so a formatter's changes show too.
    `clipOf()` diffs the two (Myers), keeps a window of up to 80 lines with 3 lines of context
    around the changed regions, and stores it as a clip in `clips`.
@@ -104,6 +107,14 @@ replay follow [Code Viz](https://github.com/Waterside-Group/code-viz)'s viewer (
      fold away
    Typing speed grows with the size of the edit, so a replay stays within a few seconds.
 5. The finished edit stays on screen for 20 s, its gutter marks fading, then the code view goes.
+
+Each frame is highlighted as one text with Prism (`hooks/vendor/prism.js`), so strings and
+comments carry across lines; `grammarOf()` picks the grammar from the file name, and `PALETTE`
+maps Prism's token kinds to Tokyo Night colours. Long lines wrap onto rows marked `↳`, and the
+window eases toward the caret a quarter of the way each frame.
+
+The bundle is built from Prism's own minified files with `_self` set to an empty object: in the
+hooks' worker Prism would otherwise answer the engine's messages.
 
 From 96 columns the code view sits beside the tree; narrower, it goes under the tree.
 
