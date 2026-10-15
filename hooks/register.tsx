@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Activity, Clip, Ghost, Op, TreeEntry, TurnInfo } from '../types'
-import { MAX_BYTES, clipOf, codeLines, codeRule, currentClip, enqueue, isClipDone } from './code'
+import { MAX_BYTES, clipOf, codeLines, codeRule, currentClip, enqueue, isClipDone, patchStats } from './code'
 import {
   COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
   buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, legendLines, mix,
@@ -18,6 +18,8 @@ const FRAME_MS = 33 // ~30 fps while anything moves, the terminal's cap for a sh
 const POLL_MS = 1500 // how often the project is rescanned for changes made outside tool calls
 const SPLIT_COLUMNS = 96 // from this wide the code view sits beside the tree, else under it
 const EDITORS = new Set(['Edit', 'MultiEdit', 'Write'])
+/** How an edit's result shows in the chat: one line while the pane replays it, or the full diff. */
+type ChatDiffs = 'quiet' | 'full'
 const PANE_BG = '#000000'
 
 const tree = atom({ plugin: 'work-visualized', key: 'tree' } as const, [] as TreeEntry[])
@@ -33,6 +35,7 @@ let scroll = 0
 let codeScroll = 0
 let animateUntil = 0
 let isWatching = true // mirrors the watching atom for synchronous checks
+let chatDiffs: ChatDiffs = 'quiet'
 let scanning: Promise<unknown> = Promise.resolve()
 
 async function scanTree($: EngineInterface): Promise<TreeEntry[]> {
@@ -173,6 +176,11 @@ export const register: Register = on => {
       name: 'watch',
       description: 'Toggle Claude Work Visualized: the live map of where Claude is working',
     }).catch(() => undefined)
+    await $.command.register({
+      name: 'diffs',
+      description: 'Toggle full edit diffs in the chat while the work pane replays them',
+    }).catch(() => undefined)
+    chatDiffs = (await $.store.get('chatDiffs').catch(() => undefined)) === 'full' ? 'full' : 'quiet'
     const now = await $.clock.now()
     const stored = await $.store.get('watching').catch(() => undefined)
     const isOn = stored !== false
@@ -224,6 +232,38 @@ export const register: Register = on => {
     })
 
     return next(e)
+  })
+
+  on('command.run', { command: 'diffs' }, async $ => {
+    chatDiffs = chatDiffs === 'quiet' ? 'full' : 'quiet'
+    await $.store.set('chatDiffs', chatDiffs).catch(() => undefined)
+    return {
+      text: chatDiffs === 'full'
+        ? 'Edits show their full diff in the chat. /diffs makes them one line again.'
+        : 'Edits show as one line in the chat while the work pane replays them.',
+    }
+  })
+
+  // The pane replays each edit, so while it shows, the chat keeps one line per edit.
+  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    if (chatDiffs === 'full' || !EDITORS.has(e.props.tool) || e.props.isErrored) return next(e)
+    const stats = patchStats(e.props.output)
+    const isPaneShown = (await $.ui.panes().catch(() => [])).some(p => p.id === PANE && p.isShown && p.isPlaced)
+    if (stats === undefined || !isPaneShown) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const file = (e.props.output as { filePath?: unknown }).filePath
+    const cwd = await $.session.cwd()
+    const path = typeof file === 'string' ? relPath(cwd, file) ?? file : 'file'
+    const isNew = (e.props.output as { type?: unknown }).type === 'create'
+    return (
+      <Box flexDirection="row">
+        <Text color={isNew ? COLOR.create : COLOR.edit}>{isNew ? `${ICON.create} Created ` : `${ICON.edit} Edited `}</Text>
+        <Text bold>{path}</Text>
+        <Text color={COLOR.create}>{` +${stats.adds}`}</Text>
+        <Text color={COLOR.delete}>{` -${stats.dels}`}</Text>
+        <Text color={MUTED}> · in the work pane</Text>
+      </Box>
+    )
   })
 
   on('command.run', { command: 'watch' }, async $ => {

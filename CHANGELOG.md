@@ -4,3 +4,4 @@
 * Add syntax highlighting in Tokyo Night colours
 * Wrap long lines, smooth the code replay
 * Change pane background to black
+* Add one-line edit results in the chat

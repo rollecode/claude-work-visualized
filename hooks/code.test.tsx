@@ -153,3 +153,46 @@ test('a long line wraps instead of running off the pane', async () => {
   expect(shown.join('').replace(/[^x]/g, '').length).toBe(70)
   for (const l of shown) expect([...l].length).toBeLessThanOrEqual(40)
 })
+
+test('an edit shows as one line in the chat while the work pane shows it', async ($, on) => {
+  mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  let panes = [{ id: 'work-map', title: 'Claude Work', isShown: true, isFocused: false, isPlaced: true }]
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', () => ({ value: [] }) as never)
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('ui.panes', () => ({ value: panes }) as never)
+  // The engine's own drawing, beneath the plugin: the full diff.
+  on('ui.render', { component: 'ToolResult' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>full diff: new line</Text>
+  })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+
+  const output = {
+    filePath: '/proj/src/a.ts',
+    structuredPatch: [{ oldStart: 1, oldLines: 2, newStart: 1, newLines: 3, lines: [' keep', '-old line', '+new line', '+another'] }],
+  }
+  const draw = async () => {
+    const ui = await $.ui.mount({
+      plugin: 'work-visualized',
+      surface: 'terminal',
+      component: 'ToolResult',
+      requestId: 'call-1',
+      props: { tool_use_id: 'call-1', tool: 'Edit', output, isErrored: false },
+    })
+    const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+    await ui.unmount()
+    return shown
+  }
+  const quiet = await draw()
+  expect(quiet).toContain('src/a.ts')
+  expect(quiet).toContain('+2 -1')
+  expect(quiet).not.toContain('new line')
+
+  panes = []
+  expect(await draw()).not.toContain('+2 -1')
+})

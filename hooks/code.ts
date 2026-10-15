@@ -220,6 +220,22 @@ export function isClipDone(clip: Clip, now: number): boolean {
   return now - (clip.at + clip.dur) >= HOLD
 }
 
+/** Lines an Edit or Write added and removed, from its result's `structuredPatch`. */
+export function patchStats(output: unknown): { adds: number; dels: number } | undefined {
+  const patch = (output as { structuredPatch?: unknown } | undefined)?.structuredPatch
+  if (!Array.isArray(patch)) return undefined
+  let adds = 0
+  let dels = 0
+  for (const hunk of patch as { lines?: unknown }[]) {
+    for (const line of Array.isArray(hunk.lines) ? hunk.lines : []) {
+      if (typeof line !== 'string') continue
+      if (line.startsWith('+')) adds++
+      else if (line.startsWith('-')) dels++
+    }
+  }
+  return { adds, dels }
+}
+
 // ---------------------------------------------------------------- replay
 
 type Kind = 'ctx' | 'del' | 'add' | 'mod'

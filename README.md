@@ -36,11 +36,14 @@ deletes it, so you can see at a glance where Claude is working right now.
 | Command | What it does |
 | --- | --- |
 | `/watch` | Turns the work map on or off (opens or closes the pane). The choice is remembered across sessions. |
+| `/diffs` | Switches edit results in the chat between one line and the full diff. The choice is remembered across sessions. |
 
 - When it's on, the pane opens by itself at session start once the terminal is at least 144
   columns wide. `/watch` opens it at any width.
 - Closing the pane by hand also turns watching off. The next `/watch` reopens it.
 - While a tool runs, the status line also shows the current operation, e.g. `± edit src/app.ts`.
+- While the pane is shown, an edit's result in the chat is one line (`± Edited src/app.ts +3 -1`),
+  since the pane replays the diff. With the pane closed, or after `/diffs`, the full diff shows.
 
 ## Visual language
 
