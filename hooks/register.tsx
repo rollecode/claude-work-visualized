@@ -5,8 +5,8 @@ import type { Activity, Clip, Ghost, Op, TreeEntry, TurnInfo } from '../types'
 import { MAX_BYTES, clipOf, codeLines, codeRule, currentClip, enqueue, isClipDone } from './code'
 import {
   COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
-  buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, legendLines, mix,
-  relPath, scrollTo, staleKeys, statusLine, summaryLines, withPath, withoutPath,
+  buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
+  placeOf, remotePath, scrollTo, staleKeys, statusLine, summaryLines, withPath, withoutPath,
 } from './model'
 import type { FolderMemory, Seg, Target } from './model'
 
@@ -33,6 +33,7 @@ let scroll = 0
 let codeScroll = 0
 let animateUntil = 0
 let isWatching = true // mirrors the watching atom for synchronous checks
+let home: string | undefined
 let scanning: Promise<unknown> = Promise.resolve()
 
 async function scanTree($: EngineInterface): Promise<TreeEntry[]> {
@@ -60,7 +61,8 @@ async function scanTree($: EngineInterface): Promise<TreeEntry[]> {
 function rescan($: EngineInterface, claimed: ReadonlySet<string>): Promise<unknown> {
   scanning = scanning.then(async () => {
     const fresh = await scanTree($)
-    const before = await read($, tree)
+    // Remote paths come from commands, not the scan, so they are kept as they are.
+    const before = (await read($, tree)).filter(t => !isUnscanned(t.p))
     const now = await $.clock.now()
     const diff = diffTrees(before, fresh)
     // Keep entries a running create put in early, so they don't blink out.
@@ -68,9 +70,9 @@ function rescan($: EngineInterface, claimed: ReadonlySet<string>): Promise<unkno
     const busy = new Set([...claimed, ...Object.keys(running).filter(p => (running[p]?.running ?? 0) > 0)])
     let merged = fresh
     for (const [p, a] of Object.entries(running)) {
-      if (a.running > 0 && a.op === 'create') merged = withPath(merged, p, false)
+      if (a.running > 0 && a.op === 'create' && !isUnscanned(p)) merged = withPath(merged, p, false)
     }
-    await update($, tree, () => merged)
+    await update($, tree, list => [...merged, ...list.filter(t => isUnscanned(t.p))])
     if (before.length === 0) return // the first map of the project is no activity
     const born = diff.created.filter(t => !busy.has(t.p))
     const changed = diff.edited.filter(p => !busy.has(p))
@@ -102,44 +104,43 @@ function rescan($: EngineInterface, claimed: ReadonlySet<string>): Promise<unkno
   return scanning
 }
 
-/** The paths a tool call touches, and how, relative to the session's folder. */
-async function targetsOf($: EngineInterface, tool: string, input: Record<string, unknown>, cwd: string): Promise<Target[]> {
+/** A tool call's path: where it sits in the tree, and the file on disk when it is on this machine. */
+type Located = Target & { file?: string }
+
+/** The paths a tool call touches, and how, as tree paths. */
+async function targetsOf($: EngineInterface, tool: string, input: Record<string, unknown>, cwd: string): Promise<Located[]> {
   const str = (k: string) => (typeof input[k] === 'string' ? (input[k] as string) : undefined)
   if ((await read($, tree)).length === 0) await scanning
-  const known = new Map((await read($, tree)).map(t => [t.p, t]))
-  const resolve = (raw: string | undefined, op: Op): Target[] => {
-    if (raw === undefined) return []
-    const path = relPath(cwd, raw.startsWith('/') || raw.startsWith('~') ? raw : `${cwd}/${raw}`)
-    if (path === undefined) return []
-    // A shell word that names no known path is most likely not a path.
-    if (tool === 'Bash' && op !== 'create' && !known.has(path)) return []
-    return [{ op, path }]
+  const known = new Set((await read($, tree)).map(t => t.p))
+  const isThere = async (place: { file: string; path: string }) => known.has(place.path) || (await $.fs.stat(place.file).then(() => true, () => false))
+  const resolve = async (raw: string | undefined, op: Op): Promise<Located[]> => {
+    const place = raw === undefined ? undefined : placeOf(cwd, raw, home)
+    if (place === undefined) return []
+    if (tool !== 'Bash' && tool !== 'Write') return [{ op, ...place }]
+    // A shell word that names no file is most likely not a path; writing one that isn't there is a create.
+    if (await isThere(place)) return [{ op, ...place }]
+    return op === 'edit' || op === 'create' ? [{ op: 'create', ...place }] : []
   }
   switch (tool) {
     case 'Read':
       return resolve(str('file_path'), 'view')
     case 'Edit':
     case 'MultiEdit':
+    case 'Write':
       return resolve(str('file_path'), 'edit')
     case 'NotebookEdit':
       return resolve(str('notebook_path'), 'edit')
-    case 'Write': {
-      const raw = str('file_path')
-      const path = raw === undefined ? undefined : relPath(cwd, raw)
-      return resolve(raw, path !== undefined && known.has(path) ? 'edit' : 'create')
-    }
     case 'Glob':
     case 'Grep':
     case 'LS':
       return resolve(str('path') ?? cwd + '/.', 'view')
     case 'Bash': {
-      const command = str('command') ?? ''
-      return classifyBash(command).flatMap(t => {
-        // Writing to a file that isn't there yet is a create.
-        const path = relPath(cwd, t.path.startsWith('/') ? t.path : `${cwd}/${t.path}`)
-        const op: Op = t.op === 'edit' && path !== undefined && !known.has(path) ? 'create' : t.op
-        return resolve(t.path, op)
-      })
+      const found = await Promise.all(classifyBash(str('command') ?? '').map(async (t): Promise<Located[]> => {
+        if (t.host === undefined) return resolve(t.path, t.op)
+        const path = remotePath(t.host, t.path)
+        return path === undefined ? [] : [{ op: t.op, path }]
+      }))
+      return found.flat()
     }
     default:
       return []
@@ -169,6 +170,7 @@ function startAnimating(now: number) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    home = await $.env.get('HOME').catch(() => undefined)
     await $.command.register({
       name: 'watch',
       description: 'Toggle Claude Work Visualized: the live map of where Claude is working',
@@ -274,7 +276,7 @@ export const register: Register = on => {
     const tool = String(e.tool)
     const mutates = tool === 'Bash' || tool === 'Write' || tool === 'Edit' || tool === 'MultiEdit' || tool === 'NotebookEdit'
     const cwd = await $.session.cwd()
-    const targets = await targetsOf($, tool, e as unknown as Record<string, unknown>, cwd).catch(() => [] as Target[])
+    const targets = await targetsOf($, tool, e as unknown as Record<string, unknown>, cwd).catch(() => [] as Located[])
     if (targets.length === 0 && !mutates) return next(e)
 
     const startedAt = await $.clock.now()
@@ -319,7 +321,14 @@ export const register: Register = on => {
         return out
       })
       if (!failed) {
-        await update($, turn, info => targets.reduce((acc, t) => (t.op === 'delete' ? acc : counted(acc, t.op, t.path)), info))
+        await update($, turn, info => targets.reduce((acc, t) => (t.op === 'delete' && !isUnscanned(t.path) ? acc : counted(acc, t.op, t.path)), info))
+      }
+      // No rescan sees a remote delete, so it turns into a ghost here.
+      const remoteGone = failed ? [] : targets.filter(t => t.op === 'delete' && isUnscanned(t.path))
+      if (remoteGone.length > 0) {
+        await update($, ghosts, map => ({ ...map, ...Object.fromEntries(remoteGone.map(t => [t.path, { d: false, at: endedAt }])) }))
+        await update($, activity, map => Object.fromEntries(Object.entries(map).filter(([p]) => !remoteGone.some(t => t.path === p))))
+        await update($, tree, list => remoteGone.reduce((acc, t) => withoutPath(acc, t.path), list))
       }
       const left = await read($, activity)
       if (focusOf(left) === undefined) setStatus($, undefined)
@@ -412,7 +421,7 @@ export const register: Register = on => {
 
       return (
         <Box flexDirection="column" width={columns} flexGrow={1} backgroundColor={PANE_BG}>
-          {line(headerLine(now, focus !== undefined || info.phase === 'working', root), 'h')}
+          {line(headerLine(now, focus !== undefined || info.phase === 'working', root, remoteOf(act, now)), 'h')}
           {line(statusLine(act, info, now, fileCount, columns), 's')}
           {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1')}
           {rows.length === 0 ? line([{ t: ' scanning…', c: MUTED }], 'empty') : visible.map(r => line(r.segs, r.key))}

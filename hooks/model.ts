@@ -117,7 +117,8 @@ export function withoutPath(tree: readonly TreeEntry[], path: string): TreeEntry
 
 // ---------------------------------------------------------------- bash
 
-export type Target = { op: Op; path: string }
+/** `host` is set for a path on another machine, reached over ssh, scp or rsync. */
+export type Target = { op: Op; path: string; host?: string }
 
 const VIEWERS = new Set([
   'cat', 'head', 'tail', 'less', 'more', 'bat', 'wc', 'grep', 'rg', 'ag', 'diff', 'file', 'stat',
@@ -126,11 +127,12 @@ const VIEWERS = new Set([
 ])
 const DELETERS = new Set(['rm', 'unlink', 'rmdir', 'trash', 'shred'])
 
+/** Shell words: quoted parts join the text around them (`K="-i x"` is one word), quotes removed. */
 function tokenize(segment: string): string[] {
   const out: string[] = []
-  const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g
+  const re = /(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s"']+)+/g
   for (let m = re.exec(segment); m !== null; m = re.exec(segment)) {
-    out.push(m[1] ?? m[2] ?? m[3] ?? '')
+    out.push(m[0].replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_, d?: string, q?: string) => d ?? q ?? ''))
   }
   return out
 }
@@ -142,9 +144,13 @@ function tokenize(segment: string): string[] {
  */
 export function classifyBash(command: string): Target[] {
   const targets: Target[] = []
-  const segments = command.split(/&&|\|\||;|\||\n/)
-  for (const segment of segments) {
-    let words = tokenize(segment.trim())
+  // What `cd` and `NAME=value` set earlier in the command, for the paths after them.
+  let dir: string | undefined
+  const vars = new Map<string, string>()
+  const within = (path: string) => (dir === undefined || path.startsWith('/') || path.startsWith('~') ? path : `${dir}/${path}`)
+  for (const { text: segment, heredoc } of unrolled(segmentsOf(command))) {
+    const start = targets.length
+    let words = tokenize(segment.trim()).map(w => expand(w, vars))
     // Redirections: `> file` writes, `< file` reads.
     const rest: string[] = []
     for (let i = 0; i < words.length; i++) {
@@ -155,6 +161,11 @@ export function classifyBash(command: string): Target[] {
         if (target && !target.startsWith('&') && target !== '/dev/null') targets.push({ op: 'edit', path: target })
         continue
       }
+      // A heredoc's marker; its body was set apart by segmentsOf().
+      if (/^<<-?/.test(w)) {
+        if (/^<<-?$/.test(w)) i++
+        continue
+      }
       if (w === '<' && words[i + 1]) {
         targets.push({ op: 'view', path: words[++i] ?? '' })
         continue
@@ -162,17 +173,39 @@ export function classifyBash(command: string): Target[] {
       rest.push(w)
     }
     words = rest
-    while (words[0] !== undefined && (/^\w+=/.test(words[0]) || ['sudo', 'command', 'exec', 'time'].includes(words[0]))) words = words.slice(1)
+    while (words[0] !== undefined && (/^\w+=/.test(words[0]) || ['sudo', 'command', 'exec', 'time', 'export'].includes(words[0]))) {
+      const set = /^(\w+)=(.*)$/.exec(words[0])
+      if (set) vars.set(set[1] ?? '', set[2] ?? '')
+      words = words.slice(1)
+    }
     let cmd = words[0]
-    if (cmd === undefined) continue
+    if (cmd === undefined) {
+      relocate(targets, start, within)
+      continue
+    }
     cmd = baseName(cmd)
     let args = words.slice(1)
+    if (cmd === 'cd') {
+      const to = args[0]
+      dir = to === undefined || to === '~' ? '~' : to === '-' ? undefined : within(to)
+      continue
+    }
     if (cmd === 'git' && (args[0] === 'rm' || args[0] === 'mv')) {
       cmd = args[0]
       args = args.slice(1)
     }
+    if (cmd === 'ssh') {
+      targets.push(...sshTargets(args, heredoc))
+      continue
+    }
+    if (SHELLS.has(cmd) && heredoc !== undefined) {
+      targets.push(...classifyBash(heredoc).map(t => (t.host === undefined ? { ...t, path: within(t.path) } : t)))
+      continue
+    }
     const operands = args.filter(a => !a.startsWith('-') && !/[*?$`(){}]/.test(a))
-    if (DELETERS.has(cmd)) {
+    if (cmd === 'scp' || cmd === 'rsync') {
+      targets.push(...copyTargets(operands))
+    } else if (DELETERS.has(cmd)) {
       for (const p of operands) targets.push({ op: 'delete', path: p })
     } else if (cmd === 'touch' || cmd === 'mkdir') {
       for (const p of operands) targets.push({ op: 'create', path: p })
@@ -187,14 +220,239 @@ export function classifyBash(command: string): Target[] {
     } else if (cmd === 'tee') {
       for (const p of operands) targets.push({ op: 'edit', path: p })
     } else if ((cmd === 'sed' || cmd === 'perl') && args.some(a => /^-[a-zA-Z]*i/.test(a))) {
-      for (const p of operands.slice(1)) targets.push({ op: 'edit', path: p })
+      for (const p of inPlaceFiles(args)) targets.push({ op: 'edit', path: p })
     } else if (VIEWERS.has(cmd)) {
       // grep/sed/awk/jq take a pattern or program first.
       const skip = ['grep', 'rg', 'ag', 'sed', 'awk', 'jq'].includes(cmd) ? 1 : 0
       for (const p of operands.slice(skip)) targets.push({ op: 'view', path: p })
     }
+    relocate(targets, start, within)
   }
   return targets
+}
+
+/** Puts this segment's local paths under the folder `cd` moved to. */
+function relocate(targets: Target[], start: number, within: (path: string) => string) {
+  for (let i = start; i < targets.length; i++) {
+    const t = targets[i]
+    if (t !== undefined && t.host === undefined) targets[i] = { ...t, path: within(t.path) }
+  }
+}
+
+/** `$NAME` and `${NAME}` replaced by what the command set them to; others left as they are. */
+function expand(word: string, vars: ReadonlyMap<string, string>): string {
+  if (vars.size === 0) return word
+  return word.replace(/\$\{(\w+)\}|\$(\w+)/g, (all, braced?: string, bare?: string) => vars.get(braced ?? bare ?? '') ?? all)
+}
+
+/** The files `sed -i` or `perl -i` change: past the script, its `-e`/`-f` values and BSD's `-i ''`. */
+function inPlaceFiles(args: readonly string[]): string[] {
+  const files: string[] = []
+  let hasScript = false
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? ''
+    if (a === '-i' && args[i + 1] === '') {
+      i++
+    } else if (a === '-e' || a === '-f' || a === '--expression' || a === '--file') {
+      hasScript = true
+      i++
+    } else if (!a.startsWith('-')) {
+      files.push(a)
+    }
+  }
+  return (hasScript ? files : files.slice(1)).filter(a => a !== '' && !/[*?$`(){}]/.test(a))
+}
+
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
+// ssh options that take a value: `-p 22`, `-i key`, `-o Option=x`, ...
+const SSH_VALUE_FLAGS = 'BbcDEeFIiJLlmOoPpQRSWw'
+const HEREDOC = /<<(?!<)-?\s*(['"]?)([\w-]+)\1/
+
+type Segment = { text: string; heredoc?: string }
+
+/**
+ * A command split on `&&`, `||`, `;`, `|` and new lines outside quotes, so
+ * `ssh host 'a && b'` stays one segment. A heredoc's body is kept apart on
+ * the segment that opened it instead of being read as commands.
+ */
+function segmentsOf(command: string): Segment[] {
+  const out: Segment[] = []
+  const lines = command.split('\n')
+  let text = ''
+  let quote: string | undefined
+  const close = () => {
+    if (text.trim() !== '') out.push({ text })
+    text = ''
+  }
+  for (let li = 0; li < lines.length; li++) {
+    let line = lines[li] ?? ''
+    const isContinued = quote === undefined && /(^|[^\\])\\$/.test(line)
+    if (isContinued) line = line.slice(0, -1)
+    const first = out.length
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i] ?? ''
+      const after = line[i + 1]
+      if (quote !== undefined) {
+        if (ch === '\\' && quote === '"') {
+          text += ch + (after ?? '')
+          i++
+          continue
+        }
+        if (ch === quote) quote = undefined
+        text += ch
+        continue
+      }
+      if (ch === '\\') {
+        text += ch + (after ?? '')
+        i++
+      } else if (ch === '"' || ch === "'") {
+        quote = ch
+        text += ch
+      } else if (ch === ';' || ch === '|' || (ch === '&' && after === '&')) {
+        if (after === ch) i++
+        close()
+      } else {
+        text += ch
+      }
+    }
+    if (quote !== undefined) {
+      text += '\n'
+      continue
+    }
+    if (isContinued) {
+      text += ' '
+      continue
+    }
+    close()
+    const opener = out.slice(first).find(s => HEREDOC.test(s.text))
+    const delimiter = opener === undefined ? undefined : HEREDOC.exec(opener.text)?.[2]
+    if (opener === undefined || delimiter === undefined) continue
+    const body: string[] = []
+    while (li + 1 < lines.length && (lines[li + 1] ?? '').trim() !== delimiter) body.push(lines[++li] ?? '')
+    li++
+    opener.heredoc = body.join('\n')
+  }
+  close()
+  return out
+}
+
+const MAX_LOOP_VALUES = 12
+
+/** `for x in a b; do …; done` as its body once per value, each after `x=value`. */
+function unrolled(segments: readonly Segment[]): Segment[] {
+  const out: Segment[] = []
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i] as Segment
+    const head = /^\s*for\s+(\w+)\s+in\s+(.*)$/.exec(seg.text)
+    if (head === null) {
+      out.push(seg)
+      continue
+    }
+    // The body runs to the matching `done`, nested loops included.
+    const body: Segment[] = []
+    let depth = 1
+    for (i++; i < segments.length; i++) {
+      const s = segments[i] as Segment
+      if (/^\s*for\s/.test(s.text)) depth++
+      if (/^\s*done\b/.test(s.text) && --depth === 0) break
+      body.push({ ...s, text: s.text.replace(/^\s*do\s+/, '') })
+    }
+    const name = head[1] ?? ''
+    for (const value of tokenize(head[2] ?? '').slice(0, MAX_LOOP_VALUES)) {
+      out.push({ text: `${name}='${value.replace(/'/g, '')}'` }, ...unrolled(body))
+    }
+  }
+  return out
+}
+
+/** `ssh [options] host [command]`: what the command does, on that host. */
+function sshTargets(args: readonly string[], heredoc: string | undefined): Target[] {
+  let i = 0
+  while (i < args.length && (args[i] ?? '').startsWith('-')) {
+    const flags = (args[i] ?? '').slice(1)
+    const at = [...flags].findIndex(f => SSH_VALUE_FLAGS.includes(f))
+    i += at >= 0 && at === flags.length - 1 ? 2 : 1
+  }
+  const host = hostName(args[i] ?? '')
+  if (host === undefined) return []
+  const remote = args.slice(i + 1).join(' ')
+  // `ssh host bash -s <<EOF` runs the heredoc's lines on the host.
+  const runsShell = tokenize(remote).filter(w => !w.startsWith('-') && w !== 'sudo').every(w => SHELLS.has(baseName(w)))
+  const script = heredoc !== undefined && runsShell ? heredoc : remote
+  return classifyBash(script).map(t => ({ ...t, host: t.host ?? host }))
+}
+
+/** `scp` and `rsync`: sources are read, the last operand written; `host:path` is remote. */
+function copyTargets(operands: readonly string[]): Target[] {
+  if (operands.length < 2) return []
+  const side = (raw: string, op: Op): Target => {
+    const m = /^([^/.:][^/:]*):(.*)$/.exec(raw)
+    const host = m === null ? undefined : hostName(m[1] ?? '')
+    return host === undefined ? { op, path: raw } : { op, path: m?.[2] ?? '', host }
+  }
+  return [...operands.slice(0, -1).map(p => side(p, 'view')), side(operands[operands.length - 1] ?? '', 'create')]
+}
+
+/** `user@host` or `host`, as typed, so the tree says which account on which machine. */
+function hostName(raw: string): string | undefined {
+  return /^([\w.-]+@)?[\w.-]+$/.test(raw) ? raw : undefined
+}
+
+/** A remote file as a tree path: `host:` is its top folder, `~` the remote home. */
+export function remotePath(host: string, raw: string): string | undefined {
+  let p = raw.trim().replace(/^\$\{?HOME\}?(?=\/|$)/, '~')
+  if (p === '' || /[*?$`(){}]/.test(p)) return undefined
+  const isAbsolute = p.startsWith('/')
+  if (p === '~' || p.startsWith('~/')) p = p.slice(1)
+  const parts: string[] = []
+  for (const part of p.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      if (parts.length === 0) return undefined
+      parts.pop()
+    } else parts.push(part)
+  }
+  if (parts.length === 0) return undefined
+  return `${host}:/${isAbsolute ? '' : '~/'}${parts.join('/')}`
+}
+
+/** Whether a tree path is one the scan never sees: on another host, or outside the session folder. */
+export function isUnscanned(path: string): boolean {
+  return /^[\w.~@-]+:\//.test(path)
+}
+
+/** Top folders for files outside the session folder: under the home folder, and anywhere else. */
+export const HOME_ROOT = '~:'
+export const DISK_ROOT = 'local:'
+
+/**
+ * Where a path a tool names sits: the file on disk and its tree path. Inside
+ * the session folder the tree path is relative; outside it goes under
+ * `~:/` or `local:/`. Undefined for the session folder itself, a word that
+ * can't be a path, or an ignored folder.
+ */
+export function placeOf(root: string, raw: string, home: string | undefined): { file: string; path: string } | undefined {
+  let p = raw.trim().replace(/^\$\{?HOME\}?(?=\/|$)/, '~')
+  if (p === '' || /[*?$`(){}]/.test(p)) return undefined
+  if (home !== undefined && (p === '~' || p.startsWith('~/'))) p = home + p.slice(1)
+  if (p.startsWith('~')) return undefined
+  const top = root.replace(/\/+$/, '')
+  if (!p.startsWith('/')) p = `${top}/${p}`
+  const parts: string[] = []
+  for (const part of p.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      if (parts.length === 0) return undefined
+      parts.pop()
+    } else parts.push(part)
+  }
+  if (parts.length === 0 || parts.some(part => IGNORED.has(part))) return undefined
+  const file = '/' + parts.join('/')
+  if (file === top) return undefined
+  if (file.startsWith(top + '/')) return { file, path: file.slice(top.length + 1) }
+  const homeTop = home?.replace(/\/+$/, '')
+  if (homeTop !== undefined && file.startsWith(homeTop + '/')) return { file, path: `${HOME_ROOT}/${file.slice(homeTop.length + 1)}` }
+  return { file, path: `${DISK_ROOT}${file}` }
 }
 
 // ---------------------------------------------------------------- diffs
@@ -609,14 +867,31 @@ export function scrollTo(current: number, rows: readonly Row[], focus: string | 
 // Glyphs every common monospace font has, so the spark never falls back to a wider font.
 const SPARK = ['·', '∙', '•', '◆', '✶', '◆', '•', '∙']
 
-/** `✶ work-map ~/project`, the spark turning while Claude works. */
-export function headerLine(now: number, isWorking: boolean, root: string): Seg[] {
+/** `✶ work-map ~/project → user@host`, the spark turning while Claude works, the host while it works remotely. */
+export function headerLine(now: number, isWorking: boolean, root: string, remote?: string): Seg[] {
   const spark = isWorking ? SPARK[Math.floor(now / 110) % SPARK.length] ?? '✶' : '✶'
-  return [
+  const segs: Seg[] = [
     { t: spark, c: isWorking ? mix(CLAUDE, '#ffd2bf', pulse(now, 900) * 0.6) : CLAUDE, b: true },
     { t: ' work-map', c: BASE, b: true },
     { t: ` ~/${root}`, c: MUTED },
   ]
+  if (remote !== undefined) segs.push({ t: ' → ', c: MUTED }, { t: remote, c: COLOR.view, b: true })
+  return segs
+}
+
+/** The host Claude most recently worked on over ssh, while that is still recent. */
+export function remoteOf(activity: Readonly<Record<string, Activity>>, now: number): string | undefined {
+  let best: string | undefined
+  let at = -Infinity
+  for (const [path, a] of Object.entries(activity)) {
+    const host = /^([\w.@-]+):\//.exec(path)?.[1]
+    if (host === undefined || `${host}:` === DISK_ROOT || levelOf(a, now) === 'none' || levelOf(a, now) === 'trail') continue
+    if (a.startedAt >= at) {
+      best = host
+      at = a.startedAt
+    }
+  }
+  return best
 }
 
 /** The prompt line: what Claude is doing right now, with a live cursor. */

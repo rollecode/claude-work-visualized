@@ -66,6 +66,25 @@ recognises:
 Only words that name a path already in the tree count (except creates), so a pattern or a flag is
 never mistaken for a file.
 
+`cd` and `NAME=value` earlier in a command carry to the commands after them, so
+`cd ~/site && F=a.php && sed -i '' -e … $F` names `~/site/a.php`. `placeOf()` puts a path
+outside the session folder under `~:/` (the home folder) or `local:/`; like remote paths, those
+are checked with `$.fs.stat` instead of the scan and kept across rescans.
+
+Commands are split outside quotes, and a heredoc's body is kept apart from the commands, so
+`ssh host 'a && b'` stays one command and the text a heredoc writes is never read as commands.
+
+### Remote work
+
+- `ssh [options] host command` reads the command as above and marks every path with the host.
+  With `bash -s` (or another shell) and a heredoc, the heredoc's lines are the command.
+- `scp` and `rsync` read their sources and create their last operand; `host:path` is remote.
+
+`remotePath()` turns a remote path into a tree path under a top folder named after the host:
+`web1:/etc/hosts`, or `web1:/~/notes.md` for one under the remote home. Remote paths can't be
+checked against a scan, so every one counts. The rescan leaves them in the tree, and a remote
+delete becomes a ghost as soon as the command succeeds.
+
 ## Code view
 
 `hooks/code.ts` replays each `Edit`, `MultiEdit` and `Write` in the pane. The line diff and the

@@ -4,3 +4,6 @@
 * Add syntax highlighting in Tokyo Night colours
 * Wrap long lines, smooth the code replay
 * Change pane background to black
+* Add ssh, scp and rsync work to the tree
+* Show files outside the session folder
+* Follow cd, variables and loops in commands

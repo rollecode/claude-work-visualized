@@ -26,6 +26,10 @@ deletes it, so you can see at a glance where Claude is working right now.
   backspaced and retyped in place, and gutter marks stay for a while after. Long lines wrap, the
   view scrolls smoothly to the caret, and code is highlighted per language (about 60, through
   Prism) in Tokyo Night colours.
+- **Remote work:** commands run over `ssh`, and files copied with `scp` or `rsync`, show in the
+  tree under a folder per host (`deploy@web1:/etc/nginx/…`, `~` for the remote home), heredoc
+  scripts and `for` loops included. While Claude works on a host, the header names it:
+  `work-map ~/project → deploy@web1`.
 - **Completion card:** when a turn ends, a card shows how many files were viewed, edited, created
   and deleted, as filling bars.
 - **Terminal style:** only one-cell glyphs and box-drawing characters, up to 30 fps while anything
@@ -179,6 +183,10 @@ claude-work-visualized/
 - **Shell commands:** files touched by `rm`, `mv`, `cp`, `touch`, `mkdir`, `cat`, `sed -i`, `>`
   and similar are recognised by reading the command text. Anything else is caught by the rescan
   after the command and shown as finished, without a "running" phase.
+- **Other folders:** files outside the session folder show under `~:/` (your home folder) or
+  `local:/`. Shell commands are followed through `cd` and `NAME=value`.
+- **Remote work:** only what the command text names is shown; remote folders are not scanned, so
+  a change a remote script makes on its own is not seen.
 - **Changes made outside Claude:** they show up too, animated as if Claude had made them.
 - **Skipped folders:** `node_modules`, `.git`, `dist`, `build`, caches and virtual environments
   are left out of the tree.
