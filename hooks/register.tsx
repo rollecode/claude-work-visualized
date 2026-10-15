@@ -36,36 +36,49 @@ let animateUntil = 0
 let isWatching = true // mirrors the watching atom for synchronous checks
 let home: string | undefined
 let scanning: Promise<unknown> = Promise.resolve()
+let lastListed: ReadonlySet<string> = new Set() // folders the last scan listed in full
 
-async function scanTree($: EngineInterface): Promise<TreeEntry[]> {
+/** The project's paths, and the folders listed in full: not cut off by the limit, nor failed. */
+async function scanTree($: EngineInterface): Promise<{ entries: TreeEntry[]; listed: Set<string> }> {
   const cwd = (await $.session.cwd()).replace(/\/+$/, '')
   const out: TreeEntry[] = []
+  const listed = new Set<string>()
   let level: string[] = ['']
   for (let depth = 0; depth < MAX_DEPTH && level.length > 0 && out.length < MAX_ENTRIES; depth++) {
     const next: string[] = []
-    const lists = await Promise.all(level.map(dir => $.fs.list(dir === '' ? cwd : `${cwd}/${dir}`).catch(() => [])))
+    const lists = await Promise.all(level.map(dir => $.fs.list(dir === '' ? cwd : `${cwd}/${dir}`).catch(() => undefined)))
     level.forEach((dir, i) => {
-      for (const entry of lists[i] ?? []) {
-        if (IGNORED.has(entry.name) || out.length >= MAX_ENTRIES) continue
+      const list = lists[i]
+      if (list === undefined) return
+      let isWhole = true
+      for (const entry of list) {
+        if (IGNORED.has(entry.name)) continue
+        if (out.length >= MAX_ENTRIES) {
+          isWhole = false
+          break
+        }
         const p = dir === '' ? entry.name : `${dir}/${entry.name}`
         const d = entry.kind === 'dir'
         out.push({ p, d, m: entry.mtimeMs })
         if (d) next.push(p)
       }
+      if (isWhole) listed.add(dir)
     })
     level = next
   }
-  return out
+  return { entries: out, listed }
 }
 
 /** Rescans the project and animates whatever changed that no tool call named. */
 function rescan($: EngineInterface, claimed: ReadonlySet<string>): Promise<unknown> {
   scanning = scanning.then(async () => {
-    const fresh = await scanTree($)
+    const scan = await scanTree($)
+    const fresh = scan.entries
     // Remote paths come from commands, not the scan, so they are kept as they are.
     const before = (await read($, tree)).filter(t => !isUnscanned(t.p))
     const now = await $.clock.now()
-    const diff = diffTrees(before, fresh)
+    const diff = diffTrees(before, fresh, { before: lastListed, after: scan.listed })
+    lastListed = scan.listed
     // Keep entries a running create put in early, so they don't blink out.
     const running = await read($, activity)
     const busy = new Set([...claimed, ...Object.keys(running).filter(p => (running[p]?.running ?? 0) > 0)])
@@ -93,7 +106,9 @@ function rescan($: EngineInterface, claimed: ReadonlySet<string>): Promise<unkno
         return out
       })
     }
+    // Only a turn's own changes count on its card; later ones still animate in the tree.
     await update($, turn, info => {
+      if (info.phase !== 'working') return info
       let t = info
       for (const e of born) t = counted(t, 'create', e.p)
       for (const p of changed) t = counted(t, 'edit', p)

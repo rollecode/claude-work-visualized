@@ -8,3 +8,4 @@
 * Show files outside the session folder
 * Follow cd, variables and loops in commands
 * Replay files shell commands change
+* Fix inflated created and deleted counts
