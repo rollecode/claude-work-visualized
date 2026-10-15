@@ -23,7 +23,9 @@ deletes it, so you can see at a glance where Claude is working right now.
   cursor.
 - **Code view:** each `Edit` and `Write` is replayed as keystrokes next to the tree: replaced
   lines turn red and fold away, new lines type in behind a caret, small changes are selected,
-  backspaced and retyped in place, and gutter marks stay for a while after.
+  backspaced and retyped in place, and gutter marks stay for a while after. Long lines wrap, the
+  view scrolls smoothly to the caret, and code is highlighted per language (about 60, through
+  Prism) in Tokyo Night colours.
 - **Completion card:** when a turn ends, a card shows how many files were viewed, edited, created
   and deleted, as filling bars.
 - **Terminal style:** only one-cell glyphs and box-drawing characters, up to 30 fps while anything
@@ -155,6 +157,7 @@ claude-work-visualized/
 │   ├── register.tsx             hooks: tool calls, scanning, /watch, timers, the pane
 │   ├── model.ts                 pure logic: command parsing, scan diffs, the animation engine
 │   ├── code.ts                  pure logic of the code view: line diff and edit replay
+│   ├── vendor/prism.js          Prism syntax highlighter, bundled as one module
 │   ├── work.test.tsx            tests
 │   └── code.test.tsx            tests of the code view
 ├── types/index.d.ts             types for the data the mod keeps in session state

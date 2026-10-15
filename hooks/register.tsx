@@ -29,6 +29,7 @@ const clips = atom({ plugin: 'work-visualized', key: 'clips' } as const, [] as C
 // Drawing memory only: a reload starts these over, harmlessly.
 const folders: FolderMemory = new Map()
 let scroll = 0
+let codeScroll = 0
 let animateUntil = 0
 let isWatching = true // mirrors the watching atom for synchronous checks
 let scanning: Promise<unknown> = Promise.resolve()
@@ -368,10 +369,12 @@ export const register: Register = on => {
       : isSplit
         ? height - 1
         : Math.max(3, Math.min(Math.max(clip.before.length, clip.after.length) + 2, Math.floor(height * 0.45)))
+    const codeView = clip === undefined ? { lines: [], scroll: 0 } : codeLines(clip, now, codeColumns, codeRows, codeScroll)
+    codeScroll = codeView.scroll
     const code = clip !== undefined && (
       <Box flexDirection="column" width={codeColumns}>
         {line(codeRule(clip, codeColumns), 'cr')}
-        {codeLines(clip, now, codeColumns, codeRows).map((segs, i) => line(segs, `c${i}`))}
+        {codeView.lines.map((segs, i) => line(segs, `c${i}`))}
       </Box>
     )
 

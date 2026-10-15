@@ -3,7 +3,9 @@
 // plugins/code-viz/server/viewer/diff.js and app.js). Pure, like model.ts.
 
 import type { Clip } from '../types'
-import { BASE, CLAUDE, COLOR, FAINT, ICON, MUTED, TINT, mix } from './model'
+import { BASE, COLOR, FAINT, ICON, MUTED, mix } from './model'
+import Prism from './vendor/prism'
+import type { PrismStream } from './vendor/prism'
 import type { Seg } from './model'
 
 export const MAX_BYTES = 256 * 1024 // bigger files show in the tree only
@@ -16,11 +18,22 @@ const MAX_QUEUE = 4
 export const HOLD = 20_000 // the finished edit stays on screen this long
 const MARKS = 8000 // gutter markers fade over this long once the replay ends
 
-const SELECTED = '#264f78'
-const TYPED = '#196c2e'
-const STRING = '#a5d6ff'
-const NUMBER = '#79c0ff'
-const KEYWORD = '#ff7b72'
+// Tokyo Night (night): the diff, selection and caret colours of the code view.
+const TN = {
+  text: '#c0caf5',
+  gutter: '#3b4261',
+  number: '#737aa2',
+  added: '#20303b',
+  removed: '#37222c',
+  typed: '#2c5a66',
+  selected: '#33467c',
+  caret: '#7aa2f7',
+  plus: '#9ece6a',
+  minus: '#f7768e',
+  changed: '#e0af68',
+}
+const WRAP = '↳' // marks a row that continues the line above
+const GLOW = 5 // typed characters this close behind the caret glow
 
 // ---------------------------------------------------------------- lines
 
@@ -361,47 +374,82 @@ export function frameOf(clip: Clip, now: number): Frame & { isDone: boolean } {
 
 // ---------------------------------------------------------------- syntax
 
-const KEYWORDS = new Set(
-  ('const let var function return if else for while do switch case break continue new class extends implements ' +
-    'import export from default async await yield try catch finally throw typeof instanceof in of void delete this ' +
-    'super null undefined true false def elif lambda pass raise with as is not and or None True False self fn pub ' +
-    'struct impl enum trait mut use mod match where type interface package func go defer chan map range public ' +
-    'private protected static final abstract readonly declare namespace echo then fi esac local nil end require').split(' '),
-)
-const HASH_COMMENTS = new Set(['py', 'sh', 'bash', 'zsh', 'fish', 'rb', 'yml', 'yaml', 'toml', 'conf', 'ini', 'pl', 'r', 'mk', 'dockerfile', 'nix'])
-const TOKEN = /("(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?|`(?:[^`\\]|\\.)*`?)|(\b\d[\w.]*)|([A-Za-z_$][\w$]*)/g
-
-/** One colour per character of a line: comments, strings, numbers and keywords. */
-function colours(line: string, hasHashComments: boolean): string[] {
-  const out = new Array<string>(line.length).fill(BASE)
-  const paintRange = (from: number, to: number, c: string) => out.fill(c, from, to)
-  if (/^\s*(\/\*|\*|<!--)/.test(line)) return out.fill(MUTED)
-  let code = line
-  const slashes = line.search(/\/\/|--\s/)
-  const hash = hasHashComments ? line.search(/(^|\s)#/) : -1
-  const cut = [slashes, hash].filter(i => i >= 0).sort((x, y) => x - y)[0]
-  if (cut !== undefined) {
-    paintRange(cut, line.length, MUTED)
-    code = line.slice(0, cut)
-  }
-  TOKEN.lastIndex = 0
-  for (let m = TOKEN.exec(code); m !== null; m = TOKEN.exec(code)) {
-    const end = m.index + m[0].length
-    if (m[1] !== undefined) {
-      paintRange(m.index, end, STRING)
-    } else if (m[2] !== undefined) {
-      paintRange(m.index, end, NUMBER)
-    } else if (KEYWORDS.has(m[0])) {
-      paintRange(m.index, end, KEYWORD)
-    }
-  }
-  return out
+// Prism's grammar for each file name or extension.
+const LANGUAGES: Record<string, string> = {
+  ts: 'typescript', mts: 'typescript', cts: 'typescript', tsx: 'tsx', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  jsx: 'jsx', php: 'php', phtml: 'php', py: 'python', rb: 'ruby', rake: 'ruby', gemspec: 'ruby', go: 'go', rs: 'rust',
+  java: 'java', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hh: 'cpp', cs: 'csharp', sh: 'bash',
+  bash: 'bash', zsh: 'bash', fish: 'bash', json: 'json', jsonc: 'json', lock: 'json', yml: 'yaml', yaml: 'yaml',
+  toml: 'toml', ini: 'ini', cfg: 'ini', conf: 'ini', sql: 'sql', md: 'markdown', markdown: 'markdown', mdx: 'markdown',
+  lua: 'lua', kt: 'kotlin', kts: 'kotlin', swift: 'swift', css: 'css', scss: 'scss', less: 'less', sass: 'sass',
+  html: 'markup', htm: 'markup', xml: 'markup', svg: 'markup', vue: 'markup', svelte: 'markup', diff: 'diff',
+  patch: 'diff', pl: 'perl', pm: 'perl', r: 'r', scala: 'scala', dart: 'dart', ex: 'elixir', exs: 'elixir',
+  hs: 'haskell', graphql: 'graphql', gql: 'graphql', twig: 'twig', mk: 'makefile', ps1: 'powershell', m: 'objectivec',
+  tf: 'hcl', hcl: 'hcl', nix: 'nix', groovy: 'groovy', gradle: 'groovy', properties: 'properties', env: 'properties',
+  zig: 'zig', vim: 'vim', erl: 'erlang', clj: 'clojure', cljs: 'clojure', ml: 'ocaml', fs: 'fsharp', jl: 'julia',
+  proto: 'protobuf', liquid: 'liquid', hbs: 'handlebars', handlebars: 'handlebars', pug: 'pug',
+  dockerfile: 'docker', makefile: 'makefile', '.htaccess': 'apacheconf', '.env': 'properties', '.bashrc': 'bash',
+  '.zshrc': 'bash', '.profile': 'bash', gemfile: 'ruby', rakefile: 'ruby', vagrantfile: 'ruby', 'nginx.conf': 'nginx',
 }
 
-function extOf(path: string): string {
+// Tokyo Night's colour for each kind of Prism token.
+const PALETTE: Record<string, string> = {
+  comment: '#565f89', prolog: '#565f89', doctype: '#565f89', cdata: '#565f89',
+  keyword: '#bb9af7', atrule: '#bb9af7', selector: '#bb9af7', 'attr-name': '#bb9af7', rule: '#bb9af7',
+  string: '#9ece6a', char: '#9ece6a', 'attr-value': '#9ece6a', 'template-string': '#9ece6a', inserted: '#9ece6a',
+  number: '#ff9e64', boolean: '#ff9e64', constant: '#ff9e64', symbol: '#ff9e64', entity: '#ff9e64', important: '#ff9e64',
+  function: '#7aa2f7', 'function-name': '#7aa2f7', title: '#7aa2f7',
+  'class-name': '#2ac3de', builtin: '#2ac3de', namespace: '#2ac3de',
+  operator: '#89ddff', regex: '#b4f9f8', url: '#73daca', property: '#73daca', key: '#73daca',
+  punctuation: '#a9b1d6', variable: '#c0caf5', parameter: '#e0af68', tag: '#f7768e', deleted: '#f7768e',
+  interpolation: '#7dcfff', 'template-punctuation': '#9ece6a', bold: '#e0af68', italic: '#e0af68', code: '#9ece6a',
+}
+
+/** Prism's grammar for a file, by its name or extension; undefined for plain text. */
+export function grammarOf(path: string): string | undefined {
   const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  if (/(^|\/)nginx\//.test(path) && name.endsWith('.conf')) return 'nginx'
   const dot = name.lastIndexOf('.')
-  return dot < 0 ? name : name.slice(dot + 1)
+  const id = LANGUAGES[name] ?? (dot < 0 ? undefined : LANGUAGES[name.slice(dot + 1)])
+  return id !== undefined && Prism.languages[id] !== undefined ? id : undefined
+}
+
+function paintStream(stream: PrismStream, colour: string, out: string[]) {
+  if (typeof stream === 'string') {
+    for (let i = 0; i < stream.length; i++) out.push(colour)
+    return
+  }
+  if (Array.isArray(stream)) {
+    for (const part of stream) paintStream(part, colour, out)
+    return
+  }
+  const aliases = stream.alias === undefined ? [] : ([] as string[]).concat(stream.alias)
+  const own = PALETTE[stream.type] ?? aliases.map(a => PALETTE[a]).find(c => c !== undefined)
+  paintStream(stream.content, own ?? colour, out)
+}
+
+// The text of the last frame and its colours: typing changes one character at a time.
+let painted: { key: string; colours: string[] } | undefined
+
+/** One colour per character of `text`, highlighted as one piece so comments and strings span lines. */
+export function coloursOf(text: string, grammar: string | undefined): string[] {
+  const key = `${grammar ?? ''}\n${text}`
+  if (painted?.key === key) return painted.colours
+  const out: string[] = []
+  const rules = grammar === undefined ? undefined : Prism.languages[grammar]
+  if (rules === undefined) {
+    out.length = text.length
+    out.fill(TN.text)
+  } else {
+    try {
+      paintStream(Prism.tokenize(text, rules), TN.text, out)
+    } catch {
+      out.length = 0
+    }
+    while (out.length < text.length) out.push(TN.text)
+  }
+  painted = { key, colours: out }
+  return out
 }
 
 // ---------------------------------------------------------------- drawing
@@ -432,75 +480,98 @@ export function codeRule(clip: Clip, columns: number): Seg[] {
   return segs
 }
 
-/** The replay as styled lines for this instant, at most `rows` of them. */
-export function codeLines(clip: Clip, now: number, columns: number, rows: number): Seg[][] {
+/** One screen row: a slice of a code line, wrapped at the pane's width. */
+type Visual = { row: CodeRow; no: number | undefined; from: number; to: number; isFirst: boolean; offset: number }
+
+/**
+ * The replay as styled lines for this instant, at most `rows` of them, long
+ * lines wrapped. `scroll` is the first row shown last frame: the window eases
+ * toward the caret from there, and the new value comes back with the lines.
+ */
+export function codeLines(clip: Clip, now: number, columns: number, rows: number, scroll = 0): { lines: Seg[][]; scroll: number } {
   const frame = frameOf(clip, now)
   const fade = frame.isDone ? smooth((now - clip.at - clip.dur) / MARKS) : 0
   const numW = String(clip.first + Math.max(clip.before.length, clip.after.length)).length
   const codeW = Math.max(4, columns - numW - 3)
-  const hasHash = HASH_COMMENTS.has(extOf(clip.path))
+
+  // The whole frame is highlighted as one text, so strings and comments carry across lines.
+  let offset = 0
+  const offsets = frame.rows.map(r => {
+    const at = offset
+    offset += r.t.length + 1
+    return at
+  })
+  const colours = coloursOf(frame.rows.map(r => r.t).join('\n'), grammarOf(clip.path))
 
   // Line numbers count the file as it is now, so removed lines get none.
   let no = clip.first
-  const numbers = frame.rows.map(r => (r.k === 'del' ? undefined : no++))
+  const visual: Visual[] = []
+  let focusAt = 0
+  frame.rows.forEach((row, i) => {
+    const number = row.k === 'del' ? undefined : no++
+    // A caret just past a full last row starts a row of its own.
+    const len = row.t.length + (row.c !== undefined && row.c === row.t.length && row.t.length % codeW === 0 && row.t.length > 0 ? 1 : 0)
+    const pieces = Math.max(1, Math.ceil(len / codeW))
+    if (i === frame.focus) focusAt = visual.length + (row.c === undefined ? 0 : Math.min(pieces - 1, Math.floor(row.c / codeW)))
+    for (let k = 0; k < pieces; k++) {
+      visual.push({ row, no: number, from: k * codeW, to: Math.min(row.t.length, (k + 1) * codeW), isFirst: k === 0, offset: offsets[i] ?? 0 })
+    }
+  })
 
   const room = Math.max(1, rows - (clip.more > 0 ? 1 : 0))
-  const start = clamp(frame.focus - Math.floor(room / 3), 0, Math.max(0, frame.rows.length - room))
-  const caret = frame.rows[frame.focus]?.c
-  const shift = caret !== undefined && caret > codeW - 2 ? caret - (codeW - 2) : 0
+  const max = Math.max(0, visual.length - room)
+  let target = clamp(scroll, 0, max)
+  if (focusAt < target + 1 || focusAt > target + room - 2) target = clamp(focusAt - Math.floor(room / 3), 0, max)
+  const delta = target - scroll
+  const next = delta === 0 ? clamp(scroll, 0, max) : clamp(scroll + Math.sign(delta) * Math.max(1, Math.ceil(Math.abs(delta) / 4)), 0, max)
 
-  const out = frame.rows.slice(start, start + room).map((r, i) => rowSegs(r, numbers[start + i], numW, codeW, shift, fade, hasHash))
-  if (clip.more > 0) out.push([{ t: ' '.repeat(numW + 2) + `… ${clip.more} more changed lines`, c: FAINT }])
-  return out
+  const lines = visual.slice(next, next + room).map(v => rowSegs(v, numW, codeW, fade, colours))
+  if (clip.more > 0) lines.push([{ t: ' '.repeat(numW + 2) + `… ${clip.more} more changed lines`, c: FAINT }])
+  return { lines, scroll: next }
 }
 
-function rowSegs(r: CodeRow, no: number | undefined, numW: number, codeW: number, shift: number, fade: number, hasHash: boolean): Seg[] {
+function rowSegs(v: Visual, numW: number, codeW: number, fade: number, colours: readonly string[]): Seg[] {
+  const { row: r } = v
   const fold = r.fold ?? 0
-  const segs: Seg[] = [{ t: (no === undefined ? '' : String(no)).padStart(numW), c: r.k === 'ctx' && r.r === undefined ? FAINT : MUTED }]
+  const label = v.isFirst && v.no !== undefined ? String(v.no) : v.isFirst ? '' : WRAP
+  const segs: Seg[] = [{ t: label.padStart(numW), c: r.k === 'ctx' && r.r === undefined ? TN.gutter : TN.number }]
 
   if (r.k === 'del') {
-    segs.push({ t: '-', c: mix(COLOR.delete, FAINT, fold), b: true })
+    segs.push({ t: v.isFirst ? '-' : ' ', c: mix(TN.minus, FAINT, fold), b: true })
   } else if (r.k === 'add') {
-    segs.push({ t: '+', c: COLOR.create, b: true })
+    segs.push({ t: v.isFirst ? '+' : ' ', c: TN.plus, b: true })
   } else if (r.k === 'mod') {
-    segs.push({ t: '▎', c: COLOR.edit, b: true })
+    segs.push({ t: '▎', c: TN.changed, b: true })
   } else if (r.r !== undefined && fade < 1) {
-    segs.push({ t: '▎', c: mix(r.r === 'add' ? COLOR.create : COLOR.edit, FAINT, fade) })
+    segs.push({ t: '▎', c: mix(r.r === 'add' ? TN.plus : TN.changed, FAINT, fade) })
   } else {
     segs.push({ t: ' ' })
   }
   segs.push({ t: ' ' })
 
-  const bg = r.k === 'del' ? mix(TINT.delete, '#0d1117', fold) : r.k === 'add' ? TINT.create : undefined
-  const tone = colours(r.t, hasHash)
-  const visible = r.t.slice(shift, shift + codeW)
-  const isCut = r.t.length > shift + codeW
-  for (let i = 0; i < visible.length; i++) {
-    const at = shift + i
-    if (isCut && i === codeW - 1) {
-      segs.push({ t: '›', c: MUTED, bg })
-      break
-    }
+  const bg = r.k === 'del' ? mix(TN.removed, '#000000', fold) : r.k === 'add' ? TN.added : undefined
+  for (let at = v.from; at < v.to; at++) {
     const inMark = r.m !== undefined && at >= r.m.from && at < r.m.to
-    let c = tone[at] ?? BASE
+    let c = colours[v.offset + at] ?? TN.text
     let cellBg = bg
-    if (r.k === 'del') c = mix(mix(COLOR.delete, BASE, 0.25), FAINT, fold)
+    if (r.k === 'del') c = mix(mix(TN.minus, TN.text, 0.35), FAINT, fold)
     if (inMark && r.m?.isSelected) {
-      cellBg = SELECTED
+      cellBg = TN.selected
     } else if (inMark) {
-      cellBg = TYPED
-      c = '#d2f8dc'
+      cellBg = TN.typed
     }
+    // What was just typed glows, cooling as the caret moves on.
+    if (r.c !== undefined && at < r.c && r.c - at <= GLOW && r.k !== 'del') c = mix(c, '#ffffff', 0.55 * (1 - (r.c - at - 1) / GLOW))
     if (r.c === at) {
-      cellBg = CLAUDE
-      c = '#0d1117'
+      cellBg = TN.caret
+      c = '#000000'
     }
-    segs.push({ t: visible[i] ?? ' ', c, bg: cellBg, s: r.k === 'del' && fold > 0 })
+    segs.push({ t: r.t[at] ?? ' ', c, bg: cellBg, s: r.k === 'del' && fold > 0 })
   }
   // The caret after the last character, then the row's tint to the edge.
-  let used = visible.length
-  if (r.c !== undefined && r.c - shift >= visible.length && used < codeW) {
-    segs.push({ t: '▏', c: CLAUDE, bg, b: true })
+  let used = v.to - v.from
+  if (r.c !== undefined && r.c >= r.t.length && r.c === v.to && used < codeW) {
+    segs.push({ t: '▏', c: TN.caret, bg, b: true })
     used++
   }
   if (bg !== undefined && used < codeW) segs.push({ t: ' '.repeat(codeW - used), bg })

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HOLD, cellSafe, clipOf, codeLines, currentClip, enqueue, frameOf, hunksOf } from './code'
+import { HOLD, cellSafe, clipOf, codeLines, coloursOf, currentClip, enqueue, frameOf, grammarOf, hunksOf } from './code'
 
 const ROOT = '/proj'
 const lines = (n: number, f = (i: number) => `line ${i}`) => Array.from({ length: n }, (_, i) => f(i + 1)).join('\n') + '\n'
@@ -73,7 +73,7 @@ test('code lines are one cell per character and never wider than the pane', asyn
   if (clip === undefined) throw new Error('no clip')
   for (const columns of [24, 40, 60]) {
     for (let t = 0; t < clip.dur + 9000; t += 23) {
-      for (const segs of codeLines(clip, t, columns, 10)) {
+      for (const segs of codeLines(clip, t, columns, 10).lines) {
         expect([...text(segs)].length).toBeLessThanOrEqual(columns)
         for (const s of segs) expect(/\p{Extended_Pictographic}/u.test(s.t)).toBe(false)
       }
@@ -126,4 +126,30 @@ test('an Edit replays in the pane under the tree', async ($, on) => {
   expect(shown).toContain('a.ts:1')
   expect(shown).toContain('const a = 1')
   await ui.unmount()
+})
+
+test('each language gets its own grammar, in Tokyo Night colours', async () => {
+  expect(grammarOf('src/a.php')).toBe('php')
+  expect(grammarOf('web/app.tsx')).toBe('tsx')
+  expect(grammarOf('Dockerfile')).toBe('docker')
+  expect(grammarOf('/etc/nginx/sites/app.conf')).toBe('nginx')
+  expect(grammarOf('notes.txt')).toBe(undefined)
+  const php = '<?php\n// note\n$id = $term->term_id ?? null;\n'
+  const c = coloursOf(php, 'php')
+  expect(c).toHaveLength(php.length)
+  expect(c[php.indexOf('// note')]).toBe('#565f89')
+  expect(c[php.indexOf('null')]).toBe('#ff9e64')
+  const md = coloursOf('# Title\n- [link](a.md) use it', 'markdown')
+  expect(md['# Title\n- [link](a.md) '.length]).toBe('#c0caf5') // "use" is not a keyword in Markdown
+})
+
+test('a long line wraps instead of running off the pane', async () => {
+  const long = 'const message = "' + 'x'.repeat(70) + '"'
+  const clip = clipOf('a.ts', 'const a = 1\n', 'const a = 1\n' + long + '\n', 0)
+  if (clip === undefined) throw new Error('no clip')
+  const { lines } = codeLines(clip, clip.dur + 1, 40, 20)
+  const shown = lines.map(l => text(l))
+  expect(shown.some(l => l.includes('↳'))).toBe(true)
+  expect(shown.join('').replace(/[^x]/g, '').length).toBe(70)
+  for (const l of shown) expect([...l].length).toBeLessThanOrEqual(40)
 })

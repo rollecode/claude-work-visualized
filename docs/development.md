@@ -58,7 +58,8 @@ with results wrapped as `{ value }` (for example `on('fs.list', () => ({ value: 
 | Which tools count as which operation | `targetsOf()` in `hooks/register.tsx` |
 | Shell command reading | `classifyBash()` in `hooks/model.ts` |
 | Pane layout | the `ui.render` hook in `hooks/register.tsx` |
-| Code view limits, timings, syntax colours | the constants and `KEYWORDS` in `hooks/code.ts` |
+| Code view limits, timings | the constants in `hooks/code.ts` |
+| Syntax colours, file types | `PALETTE`, `TN` and `LANGUAGES` in `hooks/code.ts` |
 | When the code view goes beside the tree | `SPLIT_COLUMNS` in `hooks/register.tsx` |
 
 Keep every glyph a single cell, and pick glyphs that common monospace fonts (JetBrains Mono, Fira

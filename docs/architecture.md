@@ -87,6 +87,14 @@ replay follow [Code Viz](https://github.com/Waterside-Group/code-viz)'s viewer (
    Typing speed grows with the size of the edit, so a replay stays within a few seconds.
 5. The finished edit stays on screen for 20 s, its gutter marks fading, then the code view goes.
 
+Each frame is highlighted as one text with Prism (`hooks/vendor/prism.js`), so strings and
+comments carry across lines; `grammarOf()` picks the grammar from the file name, and `PALETTE`
+maps Prism's token kinds to Tokyo Night colours. Long lines wrap onto rows marked `↳`, and the
+window eases toward the caret a quarter of the way each frame.
+
+The bundle is built from Prism's own minified files with `_self` set to an empty object: in the
+hooks' worker Prism would otherwise answer the engine's messages.
+
 From 96 columns the code view sits beside the tree; narrower, it goes under the tree.
 
 ## Scanning and diffing
