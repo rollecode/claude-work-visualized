@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, placeOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
+import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, mentionsOf, placeOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
 import type { FolderMemory } from './model'
 
 // The test environment has it; the engine's typings leave it out.
@@ -278,4 +278,84 @@ test('a for loop runs its body once per value', async () => {
   ])
   expect(remotePath('web1', '$HOME/x.log')).toBe('web1:/~/x.log')
   expect(placeOf('/home/u/site', '$HOME/notes.md', '/home/u')).toEqual({ file: '/home/u/notes.md', path: '~:/notes.md' })
+})
+
+test('a sed edit in another project shows in the tree and replays in the code view', async ($, on) => {
+  mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  mock.env(on, { HOME: '/home/u' })
+  const disk: Record<string, string> = { '/home/u/other/inc/hooks.php': '<?php\n$id = $term->term_id;\n' }
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', ($, e) =>
+    ({ value: e.path === ROOT ? [{ name: 'package.json', kind: 'file', size: 1, mtimeMs: 1, isLink: false }] : [] }) as never,
+  )
+  on('fs.stat', ($, e) => (disk[e.path] === undefined ? { deny: 'missing' } : { value: { kind: 'file', size: disk[e.path]?.length ?? 0, mtimeMs: 1, isLink: false } }) as never)
+  on('fs.read', ($, e) => (disk[e.path] === undefined ? { deny: 'missing' } : { value: disk[e.path] }) as never)
+  on('tool.call', { tool: 'Bash' }, () => {
+    disk['/home/u/other/inc/hooks.php'] = '<?php\n$id = $term->term_id ?? null;\n'
+    return { result: { stdout: '', stderr: '', interrupted: false }, isError: true } as never
+  })
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await $.tool.call({ tool: 'Bash', command: "cd ~/other && F=inc/hooks.php && sed -i '' -e 's/id;/id ?? null;/' $F && git diff | grep nothing" } as never)
+
+  const ui = await $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 34 }, view: {} },
+  })
+  const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  expect(shown).toContain('~:/')
+  expect(shown).toContain('hooks.php')
+  expect(shown).toContain('~:/other/inc/hooks.php:1')
+  await ui.unmount()
+})
+
+test('files a script names are checked, so a heredoc that rewrites one is caught', async () => {
+  const command = ["cd ~/site && python3 - <<'EOF'", "p='CHANGELOG.md'", "open(p,'w').write(open(p).read())", 'EOF', 'grep -c x CHANGELOG.md; echo v1.2.3'].join('\n')
+  expect(mentionsOf(command)).toEqual(['~/site', '~/site/CHANGELOG.md'])
+  expect(mentionsOf("ssh web1 'cat /etc/hosts'")).toEqual([])
+})
+
+test('a changelog rewritten by a python heredoc replays in the code view', async ($, on) => {
+  mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  mock.env(on, { HOME: '/home/u' })
+  const disk: Record<string, string> = { '/home/u/site/CHANGELOG.md': '### alpha\n\n* beta\n' }
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', ($, e) =>
+    ({ value: e.path === ROOT ? [{ name: 'package.json', kind: 'file', size: 1, mtimeMs: 1, isLink: false }] : [] }) as never,
+  )
+  on('fs.stat', ($, e) => (disk[e.path] === undefined ? { deny: 'missing' } : { value: { kind: 'file', size: disk[e.path]?.length ?? 0, mtimeMs: 1, isLink: false } }) as never)
+  on('fs.read', ($, e) => (disk[e.path] === undefined ? { deny: 'missing' } : { value: disk[e.path] }) as never)
+  on('tool.call', { tool: 'Bash' }, () => {
+    disk['/home/u/site/CHANGELOG.md'] = '### alpha\n\n* alpha: Guard a missing query arg\n* beta\n'
+    return { result: { stdout: '', stderr: '', interrupted: false } } as never
+  })
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  const command = ["cd ~/site && python3 - <<'EOF'", "p='CHANGELOG.md'", "s=open(p).read()", "open(p,'w').write(s)", 'EOF'].join('\n')
+  await $.tool.call({ tool: 'Bash', command } as never)
+
+  const ui = await $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 34 }, view: {} },
+  })
+  const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  expect(shown).toContain('~:/site/CHANGELOG.md:1')
+  expect(shown).toContain('CHANGELOG.md')
+  await ui.unmount()
 })

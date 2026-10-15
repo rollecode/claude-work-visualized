@@ -105,7 +105,7 @@ test('an Edit replays in the pane under the tree', async ($, on) => {
     ({ value: e.path === ROOT ? [{ name: 'a.ts', kind: 'file', size: 1, mtimeMs: 1, isLink: false }] : [] }) as never,
   )
   on('fs.stat', ($, e) => ({ value: { kind: 'file', size: (disk[e.path] ?? '').length, mtimeMs: 1, isLink: false } }) as never)
-  on('fs.read', ($, e) => (disk[e.path] === undefined ? { error: 'missing' } : { value: disk[e.path] }) as never)
+  on('fs.read', ($, e) => (disk[e.path] === undefined ? { deny: 'missing' } : { value: disk[e.path] }) as never)
   on('tool.call', { tool: 'Edit' }, () => {
     disk['/proj/a.ts'] = 'const a = 1\nconst b = 3\n'
     return { result: {} } as never

@@ -143,7 +143,24 @@ function tokenize(segment: string): string[] {
  * misses, so it only has to be right about what to animate while it runs.
  */
 export function classifyBash(command: string): Target[] {
+  return readCommand(command).targets
+}
+
+/**
+ * Words in a command that look like local files, with `cd` applied: the
+ * files a script may change without saying so (`python3 - <<EOF` writing
+ * `'CHANGELOG.md'`), which the code view checks before and after it runs.
+ */
+export function mentionsOf(command: string): string[] {
+  return [...new Set(readCommand(command).mentions)]
+}
+
+const looksLikeFile = (w: string) =>
+  /^[\w.~\/@+-]+$/.test(w) && /[^./]\.[A-Za-z][A-Za-z0-9]*$|\//.test(w) && !w.startsWith('-') && !/^[\d.]+$/.test(w) && w !== '.' && w !== '..'
+
+function readCommand(command: string): { targets: Target[]; mentions: string[] } {
   const targets: Target[] = []
+  const mentions: string[] = []
   // What `cd` and `NAME=value` set earlier in the command, for the paths after them.
   let dir: string | undefined
   const vars = new Map<string, string>()
@@ -151,6 +168,11 @@ export function classifyBash(command: string): Target[] {
   for (const { text: segment, heredoc } of unrolled(segmentsOf(command))) {
     const start = targets.length
     let words = tokenize(segment.trim()).map(w => expand(w, vars))
+    const local = !/^\s*(\S+=\S*\s+)*(sudo\s+)?ssh\s/.test(segment)
+    if (local) {
+      for (const w of words) if (looksLikeFile(w)) mentions.push(within(w))
+      for (const q of (heredoc ?? '').match(/(["'])[^"'\n]+\1/g) ?? []) if (looksLikeFile(q.slice(1, -1))) mentions.push(within(q.slice(1, -1)))
+    }
     // Redirections: `> file` writes, `< file` reads.
     const rest: string[] = []
     for (let i = 0; i < words.length; i++) {
@@ -228,7 +250,7 @@ export function classifyBash(command: string): Target[] {
     }
     relocate(targets, start, within)
   }
-  return targets
+  return { targets, mentions }
 }
 
 /** Puts this segment's local paths under the folder `cd` moved to. */

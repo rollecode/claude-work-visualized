@@ -7,3 +7,4 @@
 * Add ssh, scp and rsync work to the tree
 * Show files outside the session folder
 * Follow cd, variables and loops in commands
+* Replay files shell commands change

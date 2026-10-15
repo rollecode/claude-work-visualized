@@ -5,7 +5,7 @@ import type { Activity, Clip, Ghost, Op, TreeEntry, TurnInfo } from '../types'
 import { MAX_BYTES, clipOf, codeLines, codeRule, currentClip, enqueue, isClipDone } from './code'
 import {
   COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
-  buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
+  buildRows, classifyBash, counted, mentionsOf, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
   placeOf, remotePath, scrollTo, staleKeys, statusLine, summaryLines, withPath, withoutPath,
 } from './model'
 import type { FolderMemory, Seg, Target } from './model'
@@ -18,6 +18,7 @@ const FRAME_MS = 33 // ~30 fps while anything moves, the terminal's cap for a sh
 const POLL_MS = 1500 // how often the project is rescanned for changes made outside tool calls
 const SPLIT_COLUMNS = 96 // from this wide the code view sits beside the tree, else under it
 const EDITORS = new Set(['Edit', 'MultiEdit', 'Write'])
+const MAX_REPLAYS = 4 // files of one tool call the code view checks and replays
 const PANE_BG = '#000000'
 
 const tree = atom({ plugin: 'work-visualized', key: 'tree' } as const, [] as TreeEntry[])
@@ -149,10 +150,22 @@ async function targetsOf($: EngineInterface, tool: string, input: Record<string,
 
 /** The file's text before an edit: empty for a new file, undefined when it can't be replayed. */
 async function textBefore($: EngineInterface, path: string, target: Target): Promise<string | undefined> {
-  if (target.op === 'create') return ''
   const stat = await $.fs.stat(path).catch(() => undefined)
-  if (stat === undefined || stat.size > MAX_BYTES) return undefined
+  if (stat === undefined) return target.op === 'create' ? '' : undefined
+  if (stat.kind !== 'file' || stat.size > MAX_BYTES) return undefined
   return $.fs.read(path).catch(() => undefined)
+}
+
+/** The files whose change the code view replays: an editor's, or those a shell command writes or names. */
+async function replaysOf($: EngineInterface, tool: string, input: Record<string, unknown>, targets: readonly Located[], cwd: string): Promise<Located[]> {
+  if (!EDITORS.has(tool) && tool !== 'Bash') return []
+  const written = targets.filter(t => (t.op === 'edit' || t.op === 'create') && t.file !== undefined)
+  const command = tool === 'Bash' && typeof input['command'] === 'string' ? input['command'] : ''
+  const named = mentionsOf(command)
+    .map(w => placeOf(cwd, w, home))
+    .filter((p): p is { file: string; path: string } => p !== undefined && !written.some(t => t.file === p.file))
+    .map((p): Located => ({ op: 'view', ...p }))
+  return [...written, ...named].slice(0, MAX_REPLAYS)
 }
 
 function setStatus($: EngineInterface, text: string | undefined) {
@@ -299,12 +312,12 @@ export const register: Register = on => {
       if (first) setStatus($, `${ICON[first.op]} ${LABEL[first.op]} ${first.path}`)
     }
 
-    const filePath = (e as { file_path?: unknown }).file_path
-    const edited = EDITORS.has(tool) && typeof filePath === 'string' ? targets[0] : undefined
-    const before = edited === undefined ? undefined : await textBefore($, filePath as string, edited)
+    const replays = await replaysOf($, tool, e as unknown as Record<string, unknown>, targets, cwd)
+    const befores = await Promise.all(replays.map(t => textBefore($, t.file ?? '', t)))
 
     const ran = await next(e)
-    const failed = ran.deny !== undefined || ran.isError === true
+    // A failing shell chain may still have changed files before the step that failed.
+    const failed = ran.deny !== undefined || (ran.isError === true && tool !== 'Bash')
 
     const endedAt = await $.clock.now()
     startAnimating(endedAt)
@@ -333,11 +346,19 @@ export const register: Register = on => {
       const left = await read($, activity)
       if (focusOf(left) === undefined) setStatus($, undefined)
     }
-    if (!failed && edited !== undefined && before !== undefined) {
+    for (const [i, t] of replays.entries()) {
+      const before = befores[i]
+      if (failed || before === undefined) continue
       // Read back from disk, so a formatter's changes show as well.
-      const after = await $.fs.read(filePath as string).catch(() => undefined)
-      const clip = after === undefined ? undefined : clipOf(edited.path, before, after, endedAt)
-      if (clip !== undefined) await update($, clips, list => enqueue(list, clip, endedAt))
+      const after = await $.fs.read(t.file ?? '').catch(() => undefined)
+      const clip = after === undefined ? undefined : clipOf(t.path, before, after, endedAt)
+      if (clip === undefined) continue
+      await update($, clips, list => enqueue(list, clip, endedAt))
+      // A file the command only named, changed after all: an edit, so the tree shows it too.
+      if (targets.some(x => x.path === t.path)) continue
+      await update($, tree, list => withPath(list, t.path, false))
+      await update($, activity, map => ({ ...map, [t.path]: { op: 'edit' as const, startedAt, endedAt, running: 0 } }))
+      await update($, turn, info => counted(info, 'edit', t.path))
     }
     if (mutates) {
       // Deletes become ghosts through the rescan, so they play their exit.
