@@ -181,8 +181,8 @@ test('a Read shows in the pane as Claude viewing that file', async ($, on) => {
 
 test('commands run over ssh, scp and rsync are read as work on that host', async () => {
   expect(classifyBash("ssh -p 2222 -i ~/.ssh/key deploy@web1 'sudo sed -i s/a/b/ /etc/nginx/nginx.conf && rm -f /tmp/old.log'")).toEqual([
-    { op: 'edit', path: '/etc/nginx/nginx.conf', host: 'web1' },
-    { op: 'delete', path: '/tmp/old.log', host: 'web1' },
+    { op: 'edit', path: '/etc/nginx/nginx.conf', host: 'deploy@web1' },
+    { op: 'delete', path: '/tmp/old.log', host: 'deploy@web1' },
   ])
   expect(classifyBash('ssh web1 cat /var/log/app.log | grep error > errors.txt')).toEqual([
     { op: 'view', path: '/var/log/app.log', host: 'web1' },
@@ -195,7 +195,7 @@ test('commands run over ssh, scp and rsync are read as work on that host', async
   expect(classifyBash("ssh web1 'cat > /etc/motd' <<EOF\nrm everything\nEOF")).toEqual([{ op: 'edit', path: '/etc/motd', host: 'web1' }])
   expect(classifyBash('scp dist/app.tar.gz root@web2:/opt/app.tar.gz')).toEqual([
     { op: 'view', path: 'dist/app.tar.gz' },
-    { op: 'create', path: '/opt/app.tar.gz', host: 'web2' },
+    { op: 'create', path: '/opt/app.tar.gz', host: 'root@web2' },
   ])
   expect(classifyBash('cat > notes.md <<EOF\nrm -rf /\nEOF')).toEqual([{ op: 'edit', path: 'notes.md' }])
   expect(remotePath('web1', '/etc/./nginx/../hosts')).toBe('web1:/etc/hosts')
@@ -230,6 +230,7 @@ test('a file deleted over ssh shows under its host and plays its exit', async ($
   })
   const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
   expect(shown).toContain('web1:/')
+  expect(shown).toContain('→ web1')
   expect(shown).toContain('app.conf')
   expect(shown).toContain('old.log')
   expect(shown).toContain('package.json')

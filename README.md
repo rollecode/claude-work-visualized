@@ -22,8 +22,9 @@ deletes it, so you can see at a glance where Claude is working right now.
 - **Prompt line:** shows what Claude is doing, on which path, for how long, with a blinking
   cursor.
 - **Remote work:** commands run over `ssh`, and files copied with `scp` or `rsync`, show in the
-  tree under a folder per host (`web1:/etc/nginx/…`, `~` for the remote home), heredoc scripts
-  included.
+  tree under a folder per host (`deploy@web1:/etc/nginx/…`, `~` for the remote home), heredoc
+  scripts and `for` loops included. While Claude works on a host, the header names it:
+  `work-map ~/project → deploy@web1`.
 - **Completion card:** when a turn ends, a card shows how many files were viewed, edited, created
   and deleted, as filling bars.
 - **Terminal style:** only one-cell glyphs and box-drawing characters, up to 30 fps while anything

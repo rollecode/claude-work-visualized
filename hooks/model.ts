@@ -393,9 +393,9 @@ function copyTargets(operands: readonly string[]): Target[] {
   return [...operands.slice(0, -1).map(p => side(p, 'view')), side(operands[operands.length - 1] ?? '', 'create')]
 }
 
+/** `user@host` or `host`, as typed, so the tree says which account on which machine. */
 function hostName(raw: string): string | undefined {
-  const name = raw.slice(raw.lastIndexOf('@') + 1)
-  return /^[\w.-]+$/.test(name) ? name : undefined
+  return /^([\w.-]+@)?[\w.-]+$/.test(raw) ? raw : undefined
 }
 
 /** A remote file as a tree path: `host:` is its top folder, `~` the remote home. */
@@ -418,7 +418,7 @@ export function remotePath(host: string, raw: string): string | undefined {
 
 /** Whether a tree path is one the scan never sees: on another host, or outside the session folder. */
 export function isUnscanned(path: string): boolean {
-  return /^[\w.~-]+:\//.test(path)
+  return /^[\w.~@-]+:\//.test(path)
 }
 
 /** Top folders for files outside the session folder: under the home folder, and anywhere else. */
@@ -867,14 +867,31 @@ export function scrollTo(current: number, rows: readonly Row[], focus: string | 
 // Glyphs every common monospace font has, so the spark never falls back to a wider font.
 const SPARK = ['·', '∙', '•', '◆', '✶', '◆', '•', '∙']
 
-/** `✶ work-map ~/project`, the spark turning while Claude works. */
-export function headerLine(now: number, isWorking: boolean, root: string): Seg[] {
+/** `✶ work-map ~/project → user@host`, the spark turning while Claude works, the host while it works remotely. */
+export function headerLine(now: number, isWorking: boolean, root: string, remote?: string): Seg[] {
   const spark = isWorking ? SPARK[Math.floor(now / 110) % SPARK.length] ?? '✶' : '✶'
-  return [
+  const segs: Seg[] = [
     { t: spark, c: isWorking ? mix(CLAUDE, '#ffd2bf', pulse(now, 900) * 0.6) : CLAUDE, b: true },
     { t: ' work-map', c: BASE, b: true },
     { t: ` ~/${root}`, c: MUTED },
   ]
+  if (remote !== undefined) segs.push({ t: ' → ', c: MUTED }, { t: remote, c: COLOR.view, b: true })
+  return segs
+}
+
+/** The host Claude most recently worked on over ssh, while that is still recent. */
+export function remoteOf(activity: Readonly<Record<string, Activity>>, now: number): string | undefined {
+  let best: string | undefined
+  let at = -Infinity
+  for (const [path, a] of Object.entries(activity)) {
+    const host = /^([\w.@-]+):\//.exec(path)?.[1]
+    if (host === undefined || `${host}:` === DISK_ROOT || levelOf(a, now) === 'none' || levelOf(a, now) === 'trail') continue
+    if (a.startedAt >= at) {
+      best = host
+      at = a.startedAt
+    }
+  }
+  return best
 }
 
 /** The prompt line: what Claude is doing right now, with a live cursor. */

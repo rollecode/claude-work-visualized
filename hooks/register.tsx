@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Activity, Ghost, Op, TreeEntry, TurnInfo } from '../types'
 import {
   COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
-  buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix,
+  buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
   placeOf, remotePath, scrollTo, staleKeys, statusLine, summaryLines, withPath, withoutPath,
 } from './model'
 import type { FolderMemory, Seg, Target } from './model'
@@ -364,7 +364,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" width={columns}>
-        {line(headerLine(now, focus !== undefined || info.phase === 'working', root), 'h')}
+        {line(headerLine(now, focus !== undefined || info.phase === 'working', root, remoteOf(act, now)), 'h')}
         {line(statusLine(act, info, now, fileCount, columns), 's')}
         {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1')}
         {rows.length === 0 ? line([{ t: ' scanning…', c: MUTED }], 'empty') : visible.map(r => line(r.segs, r.key))}
