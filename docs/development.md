@@ -40,6 +40,10 @@ the reason.
 - end to end: a `Read` running against mocked `fs.list` and `session.cwd` appears in the pane on
   both the terminal and the desktop, and `/watch` switches off and on
 
+`hooks/code.test.tsx` covers the line diff, the window a clip keeps, both replays (in place and
+block), the length cap, one-cell glyphs in code lines, the clip queue, and an `Edit` showing in
+the pane end to end.
+
 Calls that reach the engine beneath the plugin have to be answered by the test's own `on(...)`,
 with results wrapped as `{ value }` (for example `on('fs.list', () => ({ value: [...] }))`).
 
@@ -54,6 +58,8 @@ with results wrapped as `{ value }` (for example `on('fs.list', () => ({ value: 
 | Which tools count as which operation | `targetsOf()` in `hooks/register.tsx` |
 | Shell command reading | `classifyBash()` in `hooks/model.ts` |
 | Pane layout | the `ui.render` hook in `hooks/register.tsx` |
+| Code view limits, timings, syntax colours | the constants and `KEYWORDS` in `hooks/code.ts` |
+| When the code view goes beside the tree | `SPLIT_COLUMNS` in `hooks/register.tsx` |
 
 Keep every glyph a single cell, and pick glyphs that common monospace fonts (JetBrains Mono, Fira
 Code, Cascadia, DejaVu Sans Mono) include. Emoji, characters that need a variation selector, and

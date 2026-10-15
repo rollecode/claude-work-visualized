@@ -21,6 +21,9 @@ deletes it, so you can see at a glance where Claude is working right now.
 - **Fading trail:** files Claude has touched stay marked and fade back to normal over about 60 s.
 - **Prompt line:** shows what Claude is doing, on which path, for how long, with a blinking
   cursor.
+- **Code view:** each `Edit` and `Write` is replayed as keystrokes next to the tree: replaced
+  lines turn red and fold away, new lines type in behind a caret, small changes are selected,
+  backspaced and retyped in place, and gutter marks stay for a while after.
 - **Completion card:** when a turn ends, a card shows how many files were viewed, edited, created
   and deleted, as filling bars.
 - **Terminal style:** only one-cell glyphs and box-drawing characters, up to 30 fps while anything
@@ -151,7 +154,9 @@ claude-work-visualized/
 │   ├── hooks.json               names the hooks module
 │   ├── register.tsx             hooks: tool calls, scanning, /watch, timers, the pane
 │   ├── model.ts                 pure logic: command parsing, scan diffs, the animation engine
-│   └── work.test.tsx            tests
+│   ├── code.ts                  pure logic of the code view: line diff and edit replay
+│   ├── work.test.tsx            tests
+│   └── code.test.tsx            tests of the code view
 ├── types/index.d.ts             types for the data the mod keeps in session state
 ├── docs/                        documentation
 │   └── media/                   README screenshots and GIF
@@ -174,6 +179,9 @@ claude-work-visualized/
 - **Changes made outside Claude:** they show up too, animated as if Claude had made them.
 - **Skipped folders:** `node_modules`, `.git`, `dist`, `build`, caches and virtual environments
   are left out of the tree.
+- **Code view:** only `Edit`, `MultiEdit` and `Write` are replayed; a file changed through a
+  shell command shows in the tree only. Files over 256 KB are skipped, and one replay shows at
+  most 80 lines.
 - **Size limit:** a scan covers at most 2,000 entries, 12 levels deep.
 - **Colours:** tuned for dark terminal themes.
 

@@ -22,6 +22,23 @@ export type TurnInfo = {
   counts: Record<Op, string[]>
 }
 
+/** One Edit or Write replayed in the code view: a window of the file before and after. */
+export type Clip = {
+  path: string
+  /** When the replay starts (ms since the epoch). */
+  at: number
+  /** How long the replay runs. */
+  dur: number
+  /** Line number of the window's first line. */
+  first: number
+  before: string[]
+  after: string[]
+  /** Lines of the new text left out of the window. */
+  more: number
+  adds: number
+  dels: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'work-visualized': {
@@ -30,6 +47,7 @@ declare module 'claude-code' {
       ghosts: Record<string, Ghost>
       turn: TurnInfo
       watching: boolean
+      clips: Clip[]
     }
   }
 }

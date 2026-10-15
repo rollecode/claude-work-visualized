@@ -24,6 +24,7 @@ hot reload:
 | `ghosts` | Deleted paths kept on screen while their exit animation plays |
 | `turn` | `idle`, `working` or `complete`, plus the paths counted per operation this turn |
 | `watching` | Whether `/watch` is on (also kept in `$.store`, so it lasts across sessions) |
+| `clips` | Edits queued or shown in the code view: a window of the file before and after |
 
 Drawing-only memory (which folders are open, the scroll position) is kept in module variables.
 Losing it on a reload is harmless.
@@ -64,6 +65,29 @@ recognises:
 
 Only words that name a path already in the tree count (except creates), so a pattern or a flag is
 never mistaken for a file.
+
+## Code view
+
+`hooks/code.ts` replays each `Edit`, `MultiEdit` and `Write` in the pane. The line diff and the
+replay follow [Code Viz](https://github.com/Waterside-Group/code-viz)'s viewer (MIT).
+
+1. **Before the tool runs**, the `tool.call` hook reads the file (empty for a new one), skipping
+   files over 256 KB.
+2. **After it succeeds**, the file is read again from disk, so a formatter's changes show too.
+   `clipOf()` diffs the two (Myers), keeps a window of up to 80 lines with 3 lines of context
+   around the changed regions, and stores it as a clip in `clips`.
+3. **Clips queue:** `enqueue()` starts each one when the one before it ends, unless that is more
+   than 2.5 s away, in which case it starts at once.
+4. **Drawing:** `frameOf()` turns the clip and the time into rows. Each changed region is
+   replayed one after another:
+   - a few lines changed in the middle are retyped in place: the old part is selected,
+     backspaced and the new part typed
+   - anything else: the old lines turn red, the new ones are typed below them, then the red rows
+     fold away
+   Typing speed grows with the size of the edit, so a replay stays within a few seconds.
+5. The finished edit stays on screen for 20 s, its gutter marks fading, then the code view goes.
+
+From 96 columns the code view sits beside the tree; narrower, it goes under the tree.
 
 ## Scanning and diffing
 
