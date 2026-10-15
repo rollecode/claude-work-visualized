@@ -34,6 +34,9 @@ const TN = {
 }
 const WRAP = '↳' // marks a row that continues the line above
 const GLOW = 5 // typed characters this close behind the caret glow
+const MIN_TYPING = 900 // ms the typing of even a tiny edit takes, at most MIN_CPS
+const MAX_TYPING = 4500
+const MIN_CPS = 18
 
 // ---------------------------------------------------------------- lines
 
@@ -229,6 +232,15 @@ type Script = { steps: Step[]; end: Frame }
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const totalOf = (steps: readonly Step[]) => steps.reduce((n, s) => n + s.dur, 0)
 
+/** How many characters retyping `b` over `a` in place types: the part between their common ends. */
+function changedPart(a: string, b: string): number {
+  let p = 0
+  while (p < a.length && p < b.length && a[p] === b[p]) p++
+  let s = 0
+  while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++
+  return b.length - p - s
+}
+
 /** Whether two lines are one line changed in the middle, so it can be retyped in place. */
 function similar(a: string, b: string): boolean {
   if (!a.trim() || !b.trim()) return false
@@ -245,11 +257,22 @@ function scriptOf(before: readonly string[], after: readonly string[]): Script {
   const steps: Step[] = []
   const hold = (frame: Frame, dur: number) => steps.push({ dur, at: () => frame })
 
-  // Long edits type faster, so the whole replay stays within a few seconds.
+  // Speed comes from what is actually typed: long edits type faster, so the
+  // replay stays within a few seconds, and a few characters still take a beat.
+  const isInPlace = (h: Hunk) => {
+    const dels = before.slice(h.a0, h.a1)
+    const adds = after.slice(h.b0, h.b1)
+    return dels.length > 0 && dels.length === adds.length && dels.length <= 4 && dels.every((d, j) => similar(d, adds[j] ?? ''))
+  }
   let chars = 0
-  for (const h of hunks) for (let j = h.b0; j < h.b1; j++) chars += (after[j] ?? '').length + 1
-  const budget = clamp(500 + chars * 12, 500, 4000)
-  const cps = Math.max(40, (chars / budget) * 1000)
+  for (const h of hunks) {
+    for (let j = h.b0; j < h.b1; j++) {
+      const a = after[j] ?? ''
+      chars += isInPlace(h) ? changedPart(before[h.a0 + j - h.b0] ?? '', a) + 1 : a.length + 1
+    }
+  }
+  const budget = clamp(MIN_TYPING + chars * 14, MIN_TYPING, MAX_TYPING)
+  const cps = Math.max(MIN_CPS, (chars / budget) * 1000)
   const typing = (n: number, rate: number) => (n / rate) * 1000
 
   let doc: CodeRow[] = before.map(t => ({ k: 'ctx', t }))
@@ -260,8 +283,7 @@ function scriptOf(before: readonly string[], after: readonly string[]): Script {
     const post = doc.slice(h.b0 + dels.length)
     hold({ rows: doc, focus: h.b0 }, i === 0 ? 140 : 220)
 
-    const isInPlace = dels.length > 0 && dels.length === adds.length && dels.length <= 4 && dels.every((d, j) => similar(d, adds[j] ?? ''))
-    if (isInPlace) {
+    if (isInPlace(h)) {
       inPlaceSteps(steps, pre, post, dels, adds, cps, typing)
     } else {
       blockSteps(steps, pre, post, dels, adds, cps, typing)
