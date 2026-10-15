@@ -66,6 +66,9 @@ recognises:
 Only words that name a path already in the tree count (except creates), so a pattern or a flag is
 never mistaken for a file.
 
+`cd` and `NAME=value` earlier in a command carry to the commands after them, so
+`cd ~/site && F=a.php && sed -i '' -e … $F` names `~/site/a.php`.
+
 Commands are split outside quotes, and a heredoc's body is kept apart from the commands, so
 `ssh host 'a && b'` stays one command and the text a heredoc writes is never read as commands.
 
@@ -86,7 +89,8 @@ delete becomes a ghost as soon as the command succeeds.
 replay follow [Code Viz](https://github.com/Waterside-Group/code-viz)'s viewer (MIT).
 
 1. **Before the tool runs**, the `tool.call` hook reads the file (empty for a new one), skipping
-   files over 256 KB.
+   files over 256 KB. For a shell command, that is up to 3 files it writes (`sed -i`, `>`, `tee`),
+   replayed even when a later step of the command fails.
 2. **After it succeeds**, the file is read again from disk, so a formatter's changes show too.
    `clipOf()` diffs the two (Myers), keeps a window of up to 80 lines with 3 lines of context
    around the changed regions, and stores it as a clip in `clips`.

@@ -21,7 +21,8 @@ deletes it, so you can see at a glance where Claude is working right now.
 - **Fading trail:** files Claude has touched stay marked and fade back to normal over about 60 s.
 - **Prompt line:** shows what Claude is doing, on which path, for how long, with a blinking
   cursor.
-- **Code view:** each `Edit` and `Write` is replayed as keystrokes next to the tree: replaced
+- **Code view:** each `Edit` and `Write`, and each file a shell command changes (`sed -i`, `>`,
+  `tee`), is replayed as keystrokes next to the tree: replaced
   lines turn red and fold away, new lines type in behind a caret, small changes are selected,
   backspaced and retyped in place, and gutter marks stay for a while after.
 - **Remote work:** commands run over `ssh`, and files copied with `scp` or `rsync`, show in the
@@ -179,13 +180,15 @@ claude-work-visualized/
 - **Shell commands:** files touched by `rm`, `mv`, `cp`, `touch`, `mkdir`, `cat`, `sed -i`, `>`
   and similar are recognised by reading the command text. Anything else is caught by the rescan
   after the command and shown as finished, without a "running" phase.
+- **Other folders:** files outside the session folder show under `~:/` (your home folder) or
+  `local:/`. Shell commands are followed through `cd` and `NAME=value`.
 - **Remote work:** only what the command text names is shown; remote folders are not scanned, so
   a change a remote script makes on its own is not seen.
 - **Changes made outside Claude:** they show up too, animated as if Claude had made them.
 - **Skipped folders:** `node_modules`, `.git`, `dist`, `build`, caches and virtual environments
   are left out of the tree.
-- **Code view:** only `Edit`, `MultiEdit` and `Write` are replayed; a file changed through a
-  shell command shows in the tree only. Files over 256 KB are skipped, and one replay shows at
+- **Code view:** shell edits are replayed only for files the command names (up to 3 per command);
+  a script that changes files on its own shows in the tree only. Files over 256 KB are skipped, and one replay shows at
   most 80 lines.
 - **Size limit:** a scan covers at most 2,000 entries, 12 levels deep.
 - **Colours:** tuned for dark terminal themes.

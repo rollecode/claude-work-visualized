@@ -5,8 +5,8 @@ import type { Activity, Clip, Ghost, Op, TreeEntry, TurnInfo } from '../types'
 import { MAX_BYTES, clipOf, codeLines, codeRule, currentClip, enqueue, isClipDone } from './code'
 import {
   COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
-  buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isRemote, legendLines, mix,
-  relPath, remotePath, scrollTo, staleKeys, statusLine, summaryLines, withPath, withoutPath,
+  buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix,
+  placeOf, remotePath, scrollTo, staleKeys, statusLine, summaryLines, withPath, withoutPath,
 } from './model'
 import type { FolderMemory, Seg, Target } from './model'
 
@@ -18,6 +18,8 @@ const FRAME_MS = 33 // ~30 fps while anything moves, the terminal's cap for a sh
 const POLL_MS = 1500 // how often the project is rescanned for changes made outside tool calls
 const SPLIT_COLUMNS = 96 // from this wide the code view sits beside the tree, else under it
 const EDITORS = new Set(['Edit', 'MultiEdit', 'Write'])
+const MAX_REPLAYS = 3 // files of one tool call the code view replays
+const PANE_BG = '#000000'
 
 const tree = atom({ plugin: 'work-visualized', key: 'tree' } as const, [] as TreeEntry[])
 const activity = atom({ plugin: 'work-visualized', key: 'activity' } as const, {} as Record<string, Activity>)
@@ -31,6 +33,7 @@ const folders: FolderMemory = new Map()
 let scroll = 0
 let animateUntil = 0
 let isWatching = true // mirrors the watching atom for synchronous checks
+let home: string | undefined
 let scanning: Promise<unknown> = Promise.resolve()
 
 async function scanTree($: EngineInterface): Promise<TreeEntry[]> {
@@ -59,7 +62,7 @@ function rescan($: EngineInterface, claimed: ReadonlySet<string>): Promise<unkno
   scanning = scanning.then(async () => {
     const fresh = await scanTree($)
     // Remote paths come from commands, not the scan, so they are kept as they are.
-    const before = (await read($, tree)).filter(t => !isRemote(t.p))
+    const before = (await read($, tree)).filter(t => !isUnscanned(t.p))
     const now = await $.clock.now()
     const diff = diffTrees(before, fresh)
     // Keep entries a running create put in early, so they don't blink out.
@@ -67,9 +70,9 @@ function rescan($: EngineInterface, claimed: ReadonlySet<string>): Promise<unkno
     const busy = new Set([...claimed, ...Object.keys(running).filter(p => (running[p]?.running ?? 0) > 0)])
     let merged = fresh
     for (const [p, a] of Object.entries(running)) {
-      if (a.running > 0 && a.op === 'create' && !isRemote(p)) merged = withPath(merged, p, false)
+      if (a.running > 0 && a.op === 'create' && !isUnscanned(p)) merged = withPath(merged, p, false)
     }
-    await update($, tree, list => [...merged, ...list.filter(t => isRemote(t.p))])
+    await update($, tree, list => [...merged, ...list.filter(t => isUnscanned(t.p))])
     if (before.length === 0) return // the first map of the project is no activity
     const born = diff.created.filter(t => !busy.has(t.p))
     const changed = diff.edited.filter(p => !busy.has(p))
@@ -101,48 +104,43 @@ function rescan($: EngineInterface, claimed: ReadonlySet<string>): Promise<unkno
   return scanning
 }
 
-/** The paths a tool call touches, and how, relative to the session's folder. */
-async function targetsOf($: EngineInterface, tool: string, input: Record<string, unknown>, cwd: string): Promise<Target[]> {
+/** A tool call's path: where it sits in the tree, and the file on disk when it is on this machine. */
+type Located = Target & { file?: string }
+
+/** The paths a tool call touches, and how, as tree paths. */
+async function targetsOf($: EngineInterface, tool: string, input: Record<string, unknown>, cwd: string): Promise<Located[]> {
   const str = (k: string) => (typeof input[k] === 'string' ? (input[k] as string) : undefined)
   if ((await read($, tree)).length === 0) await scanning
-  const known = new Map((await read($, tree)).map(t => [t.p, t]))
-  const resolve = (raw: string | undefined, op: Op): Target[] => {
-    if (raw === undefined) return []
-    const path = relPath(cwd, raw.startsWith('/') || raw.startsWith('~') ? raw : `${cwd}/${raw}`)
-    if (path === undefined) return []
-    // A shell word that names no known path is most likely not a path.
-    if (tool === 'Bash' && op !== 'create' && !known.has(path)) return []
-    return [{ op, path }]
+  const known = new Set((await read($, tree)).map(t => t.p))
+  const isThere = async (place: { file: string; path: string }) => known.has(place.path) || (await $.fs.stat(place.file).then(() => true, () => false))
+  const resolve = async (raw: string | undefined, op: Op): Promise<Located[]> => {
+    const place = raw === undefined ? undefined : placeOf(cwd, raw, home)
+    if (place === undefined) return []
+    if (tool !== 'Bash' && tool !== 'Write') return [{ op, ...place }]
+    // A shell word that names no file is most likely not a path; writing one that isn't there is a create.
+    if (await isThere(place)) return [{ op, ...place }]
+    return op === 'edit' || op === 'create' ? [{ op: 'create', ...place }] : []
   }
   switch (tool) {
     case 'Read':
       return resolve(str('file_path'), 'view')
     case 'Edit':
     case 'MultiEdit':
+    case 'Write':
       return resolve(str('file_path'), 'edit')
     case 'NotebookEdit':
       return resolve(str('notebook_path'), 'edit')
-    case 'Write': {
-      const raw = str('file_path')
-      const path = raw === undefined ? undefined : relPath(cwd, raw)
-      return resolve(raw, path !== undefined && known.has(path) ? 'edit' : 'create')
-    }
     case 'Glob':
     case 'Grep':
     case 'LS':
       return resolve(str('path') ?? cwd + '/.', 'view')
     case 'Bash': {
-      const command = str('command') ?? ''
-      return classifyBash(command).flatMap(t => {
-        if (t.host !== undefined) {
-          const path = remotePath(t.host, t.path)
-          return path === undefined ? [] : [{ op: t.op, path }]
-        }
-        // Writing to a file that isn't there yet is a create.
-        const path = relPath(cwd, t.path.startsWith('/') ? t.path : `${cwd}/${t.path}`)
-        const op: Op = t.op === 'edit' && path !== undefined && !known.has(path) ? 'create' : t.op
-        return resolve(t.path, op)
-      })
+      const found = await Promise.all(classifyBash(str('command') ?? '').map(async (t): Promise<Located[]> => {
+        if (t.host === undefined) return resolve(t.path, t.op)
+        const path = remotePath(t.host, t.path)
+        return path === undefined ? [] : [{ op: t.op, path }]
+      }))
+      return found.flat()
     }
     default:
       return []
@@ -150,7 +148,7 @@ async function targetsOf($: EngineInterface, tool: string, input: Record<string,
 }
 
 /** The file's text before an edit: empty for a new file, undefined when it can't be replayed. */
-async function textBefore($: EngineInterface, path: string, target: Target): Promise<string | undefined> {
+async function textBefore($: EngineInterface, path: string, target: Located): Promise<string | undefined> {
   if (target.op === 'create') return ''
   const stat = await $.fs.stat(path).catch(() => undefined)
   if (stat === undefined || stat.size > MAX_BYTES) return undefined
@@ -172,6 +170,7 @@ function startAnimating(now: number) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    home = await $.env.get('HOME').catch(() => undefined)
     await $.command.register({
       name: 'watch',
       description: 'Toggle Claude Work Visualized: the live map of where Claude is working',
@@ -277,7 +276,7 @@ export const register: Register = on => {
     const tool = String(e.tool)
     const mutates = tool === 'Bash' || tool === 'Write' || tool === 'Edit' || tool === 'MultiEdit' || tool === 'NotebookEdit'
     const cwd = await $.session.cwd()
-    const targets = await targetsOf($, tool, e as unknown as Record<string, unknown>, cwd).catch(() => [] as Target[])
+    const targets = await targetsOf($, tool, e as unknown as Record<string, unknown>, cwd).catch(() => [] as Located[])
     if (targets.length === 0 && !mutates) return next(e)
 
     const startedAt = await $.clock.now()
@@ -300,12 +299,15 @@ export const register: Register = on => {
       if (first) setStatus($, `${ICON[first.op]} ${LABEL[first.op]} ${first.path}`)
     }
 
-    const filePath = (e as { file_path?: unknown }).file_path
-    const edited = EDITORS.has(tool) && typeof filePath === 'string' ? targets[0] : undefined
-    const before = edited === undefined ? undefined : await textBefore($, filePath as string, edited)
+    // Files whose change the code view replays: an editor's, or what a shell command writes.
+    const replays = EDITORS.has(tool) || tool === 'Bash'
+      ? targets.filter(t => (t.op === 'edit' || t.op === 'create') && t.file !== undefined).slice(0, MAX_REPLAYS)
+      : []
+    const befores = await Promise.all(replays.map(t => textBefore($, t.file ?? '', t)))
 
     const ran = await next(e)
-    const failed = ran.deny !== undefined || ran.isError === true
+    // A failing shell chain may still have changed files before the step that failed.
+    const failed = ran.deny !== undefined || (ran.isError === true && tool !== 'Bash')
 
     const endedAt = await $.clock.now()
     startAnimating(endedAt)
@@ -322,10 +324,10 @@ export const register: Register = on => {
         return out
       })
       if (!failed) {
-        await update($, turn, info => targets.reduce((acc, t) => (t.op === 'delete' && !isRemote(t.path) ? acc : counted(acc, t.op, t.path)), info))
+        await update($, turn, info => targets.reduce((acc, t) => (t.op === 'delete' && !isUnscanned(t.path) ? acc : counted(acc, t.op, t.path)), info))
       }
       // No rescan sees a remote delete, so it turns into a ghost here.
-      const remoteGone = failed ? [] : targets.filter(t => t.op === 'delete' && isRemote(t.path))
+      const remoteGone = failed ? [] : targets.filter(t => t.op === 'delete' && isUnscanned(t.path))
       if (remoteGone.length > 0) {
         await update($, ghosts, map => ({ ...map, ...Object.fromEntries(remoteGone.map(t => [t.path, { d: false, at: endedAt }])) }))
         await update($, activity, map => Object.fromEntries(Object.entries(map).filter(([p]) => !remoteGone.some(t => t.path === p))))
@@ -334,10 +336,12 @@ export const register: Register = on => {
       const left = await read($, activity)
       if (focusOf(left) === undefined) setStatus($, undefined)
     }
-    if (!failed && edited !== undefined && before !== undefined) {
+    for (const [i, t] of replays.entries()) {
+      const before = befores[i]
+      if (failed || before === undefined) continue
       // Read back from disk, so a formatter's changes show as well.
-      const after = await $.fs.read(filePath as string).catch(() => undefined)
-      const clip = after === undefined ? undefined : clipOf(edited.path, before, after, endedAt)
+      const after = await $.fs.read(t.file ?? '').catch(() => undefined)
+      const clip = after === undefined ? undefined : clipOf(t.path, before, after, endedAt)
       if (clip !== undefined) await update($, clips, list => enqueue(list, clip, endedAt))
     }
     if (mutates) {
@@ -364,9 +368,9 @@ export const register: Register = on => {
     const clip = currentClip(await read($, clips), now)
 
     const line = (segs: Seg[], key: string) => (
-      <Box key={key} flexDirection="row" height={1}>
+      <Box key={key} flexDirection="row" height={1} backgroundColor={PANE_BG}>
         {merge(segs).map(s => (
-          <Text color={s.c} backgroundColor={s.bg} bold={s.b} dimColor={s.dim} strikethrough={s.s} wrap="truncate">
+          <Text color={s.c} backgroundColor={s.bg ?? PANE_BG} bold={s.b} dimColor={s.dim} strikethrough={s.s} wrap="truncate">
             {s.t}
           </Text>
         ))}
@@ -381,7 +385,7 @@ export const register: Register = on => {
         ? height - 1
         : Math.max(3, Math.min(Math.max(clip.before.length, clip.after.length) + 2, Math.floor(height * 0.45)))
     const code = clip !== undefined && (
-      <Box flexDirection="column" width={codeColumns}>
+      <Box flexDirection="column" width={codeColumns} backgroundColor={PANE_BG}>
         {line(codeRule(clip, codeColumns), 'cr')}
         {codeLines(clip, now, codeColumns, codeRows).map((segs, i) => line(segs, `c${i}`))}
       </Box>
@@ -389,9 +393,9 @@ export const register: Register = on => {
 
     if (isSplit) {
       return (
-        <Box flexDirection="row" width={paneColumns}>
+        <Box flexDirection="row" width={paneColumns} flexGrow={1} backgroundColor={PANE_BG}>
           {mapView(treeColumns)}
-          <Box width={2} />
+          <Box width={2} backgroundColor={PANE_BG} />
           {code}
         </Box>
       )
@@ -419,19 +423,19 @@ export const register: Register = on => {
       const card = Math.min(smoothIn(age / 500), info.phase === 'complete' && age > T.summary - 1500 ? Math.max(0, (T.summary - age) / 1500) : 1)
 
       return (
-        <Box flexDirection="column" width={columns}>
+        <Box flexDirection="column" width={columns} flexGrow={1} backgroundColor={PANE_BG}>
           {line(headerLine(now, focus !== undefined || info.phase === 'working', root), 'h')}
           {line(statusLine(act, info, now, fileCount, columns), 's')}
           {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1')}
           {rows.length === 0 ? line([{ t: ' scanning…', c: MUTED }], 'empty') : visible.map(r => line(r.segs, r.key))}
           {below > 0 && line([{ t: `   ↓ ${below} more`, c: FAINT }], 'down')}
           {summary.length > 0 && (
-            <Box flexDirection="column" borderStyle="round" borderColor={mix(FAINT, COLOR.create, card * 0.8)} paddingX={1}>
+            <Box flexDirection="column" borderStyle="round" borderColor={mix(FAINT, COLOR.create, card * 0.8)} paddingX={1} backgroundColor={PANE_BG}>
               {summary.map((segs, i) => line(segs, `sum${i}`))}
             </Box>
           )}
           {under}
-          <Box flexGrow={1} />
+          <Box flexGrow={1} backgroundColor={PANE_BG} />
           {rule('legend', 'r2')}
           {legend.map((segs, i) => line(segs, `leg${i}`))}
         </Box>

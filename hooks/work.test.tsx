@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
+import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, placeOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
 import type { FolderMemory } from './model'
 
 // The test environment has it; the engine's typings leave it out.
@@ -233,5 +233,67 @@ test('a file deleted over ssh shows under its host and plays its exit', async ($
   expect(shown).toContain('app.conf')
   expect(shown).toContain('old.log')
   expect(shown).toContain('package.json')
+  await ui.unmount()
+})
+
+test('cd and variables set earlier in a command lead to the files after them', async () => {
+  expect(classifyBash("cd ~/Projects/site && F=web/inc/hooks.php && sed -i '' -e '18s/\\$a->id;/\\$a->id ?? null;/' -e '21s/x/y/' $F && git diff | grep '^[+-] '")).toEqual([
+    { op: 'edit', path: '~/Projects/site/web/inc/hooks.php' },
+  ])
+  expect(classifyBash('cd lib; cat a.ts > ../b.ts; cd -; rm c.ts')).toEqual([
+    { op: 'edit', path: 'lib/../b.ts' },
+    { op: 'view', path: 'lib/a.ts' },
+    { op: 'delete', path: 'c.ts' },
+  ])
+  expect(classifyBash("perl -pi -e 's/a/b/' x.txt y.txt")).toEqual([
+    { op: 'edit', path: 'x.txt' },
+    { op: 'edit', path: 'y.txt' },
+  ])
+  expect(classifyBash("sed -i 's/a/b/' z.txt")).toEqual([{ op: 'edit', path: 'z.txt' }])
+})
+
+test('paths outside the session folder go under the home folder or the disk', async () => {
+  expect(placeOf('/home/u/site', 'src/a.ts', '/home/u')).toEqual({ file: '/home/u/site/src/a.ts', path: 'src/a.ts' })
+  expect(placeOf('/home/u/site', '~/Projects/other/x.php', '/home/u')).toEqual({ file: '/home/u/Projects/other/x.php', path: '~:/Projects/other/x.php' })
+  expect(placeOf('/home/u/site', '../other/y.php', '/home/u')).toEqual({ file: '/home/u/other/y.php', path: '~:/other/y.php' })
+  expect(placeOf('/home/u/site', '/etc/hosts', '/home/u')).toEqual({ file: '/etc/hosts', path: 'local:/etc/hosts' })
+  expect(placeOf('/home/u/site', 'node_modules/x.js', '/home/u')).toBe(undefined)
+  expect(placeOf('/home/u/site', '$F', '/home/u')).toBe(undefined)
+})
+
+test('a sed edit in another project shows in the tree and replays in the code view', async ($, on) => {
+  mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  mock.env(on, { HOME: '/home/u' })
+  const disk: Record<string, string> = { '/home/u/other/inc/hooks.php': '<?php\n$id = $term->term_id;\n' }
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', ($, e) =>
+    ({ value: e.path === ROOT ? [{ name: 'package.json', kind: 'file', size: 1, mtimeMs: 1, isLink: false }] : [] }) as never,
+  )
+  on('fs.stat', ($, e) => (disk[e.path] === undefined ? { error: 'missing' } : { value: { kind: 'file', size: disk[e.path]?.length ?? 0, mtimeMs: 1, isLink: false } }) as never)
+  on('fs.read', ($, e) => (disk[e.path] === undefined ? { error: 'missing' } : { value: disk[e.path] }) as never)
+  on('tool.call', { tool: 'Bash' }, () => {
+    disk['/home/u/other/inc/hooks.php'] = '<?php\n$id = $term->term_id ?? null;\n'
+    return { result: { stdout: '', stderr: '', interrupted: false }, isError: true } as never
+  })
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await $.tool.call({ tool: 'Bash', command: "cd ~/other && F=inc/hooks.php && sed -i '' -e 's/id;/id ?? null;/' $F && git diff | grep nothing" } as never)
+
+  const ui = await $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 34 }, view: {} },
+  })
+  const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  expect(shown).toContain('~:/')
+  expect(shown).toContain('hooks.php')
+  expect(shown).toContain('~:/other/inc/hooks.php:1')
   await ui.unmount()
 })
