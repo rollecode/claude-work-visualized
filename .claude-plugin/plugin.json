@@ -1,6 +1,6 @@
 {
   "name": "work-visualized",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Claude Work Visualized: a live, animated map of the project showing where Claude reads, edits, creates and deletes files",
   "author": { "name": "Grzegorz Sierocki" },
   "license": "MIT",
