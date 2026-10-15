@@ -9,3 +9,4 @@
 * Follow cd, variables and loops in commands
 * Replay files shell commands change
 * Fix inflated created and deleted counts
+* Add one-line edit results in the chat
