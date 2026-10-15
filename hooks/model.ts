@@ -143,8 +143,13 @@ function tokenize(segment: string): string[] {
  */
 export function classifyBash(command: string): Target[] {
   const targets: Target[] = []
+  // What `cd` and `NAME=value` set earlier in the command, for the paths after them.
+  let dir: string | undefined
+  const vars = new Map<string, string>()
+  const within = (path: string) => (dir === undefined || path.startsWith('/') || path.startsWith('~') ? path : `${dir}/${path}`)
   for (const { text: segment, heredoc } of segmentsOf(command)) {
-    let words = tokenize(segment.trim())
+    const start = targets.length
+    let words = tokenize(segment.trim()).map(w => expand(w, vars))
     // Redirections: `> file` writes, `< file` reads.
     const rest: string[] = []
     for (let i = 0; i < words.length; i++) {
@@ -167,11 +172,23 @@ export function classifyBash(command: string): Target[] {
       rest.push(w)
     }
     words = rest
-    while (words[0] !== undefined && (/^\w+=/.test(words[0]) || ['sudo', 'command', 'exec', 'time'].includes(words[0]))) words = words.slice(1)
+    while (words[0] !== undefined && (/^\w+=/.test(words[0]) || ['sudo', 'command', 'exec', 'time', 'export'].includes(words[0]))) {
+      const set = /^(\w+)=(.*)$/.exec(words[0])
+      if (set) vars.set(set[1] ?? '', set[2] ?? '')
+      words = words.slice(1)
+    }
     let cmd = words[0]
-    if (cmd === undefined) continue
+    if (cmd === undefined) {
+      relocate(targets, start, within)
+      continue
+    }
     cmd = baseName(cmd)
     let args = words.slice(1)
+    if (cmd === 'cd') {
+      const to = args[0]
+      dir = to === undefined || to === '~' ? '~' : to === '-' ? undefined : within(to)
+      continue
+    }
     if (cmd === 'git' && (args[0] === 'rm' || args[0] === 'mv')) {
       cmd = args[0]
       args = args.slice(1)
@@ -181,7 +198,7 @@ export function classifyBash(command: string): Target[] {
       continue
     }
     if (SHELLS.has(cmd) && heredoc !== undefined) {
-      targets.push(...classifyBash(heredoc))
+      targets.push(...classifyBash(heredoc).map(t => (t.host === undefined ? { ...t, path: within(t.path) } : t)))
       continue
     }
     const operands = args.filter(a => !a.startsWith('-') && !/[*?$`(){}]/.test(a))
@@ -202,14 +219,47 @@ export function classifyBash(command: string): Target[] {
     } else if (cmd === 'tee') {
       for (const p of operands) targets.push({ op: 'edit', path: p })
     } else if ((cmd === 'sed' || cmd === 'perl') && args.some(a => /^-[a-zA-Z]*i/.test(a))) {
-      for (const p of operands.slice(1)) targets.push({ op: 'edit', path: p })
+      for (const p of inPlaceFiles(args)) targets.push({ op: 'edit', path: p })
     } else if (VIEWERS.has(cmd)) {
       // grep/sed/awk/jq take a pattern or program first.
       const skip = ['grep', 'rg', 'ag', 'sed', 'awk', 'jq'].includes(cmd) ? 1 : 0
       for (const p of operands.slice(skip)) targets.push({ op: 'view', path: p })
     }
+    relocate(targets, start, within)
   }
   return targets
+}
+
+/** Puts this segment's local paths under the folder `cd` moved to. */
+function relocate(targets: Target[], start: number, within: (path: string) => string) {
+  for (let i = start; i < targets.length; i++) {
+    const t = targets[i]
+    if (t !== undefined && t.host === undefined) targets[i] = { ...t, path: within(t.path) }
+  }
+}
+
+/** `$NAME` and `${NAME}` replaced by what the command set them to; others left as they are. */
+function expand(word: string, vars: ReadonlyMap<string, string>): string {
+  if (vars.size === 0) return word
+  return word.replace(/\$\{(\w+)\}|\$(\w+)/g, (all, braced?: string, bare?: string) => vars.get(braced ?? bare ?? '') ?? all)
+}
+
+/** The files `sed -i` or `perl -i` change: past the script, its `-e`/`-f` values and BSD's `-i ''`. */
+function inPlaceFiles(args: readonly string[]): string[] {
+  const files: string[] = []
+  let hasScript = false
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? ''
+    if (a === '-i' && args[i + 1] === '') {
+      i++
+    } else if (a === '-e' || a === '-f' || a === '--expression' || a === '--file') {
+      hasScript = true
+      i++
+    } else if (!a.startsWith('-')) {
+      files.push(a)
+    }
+  }
+  return (hasScript ? files : files.slice(1)).filter(a => a !== '' && !/[*?$`(){}]/.test(a))
 }
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])

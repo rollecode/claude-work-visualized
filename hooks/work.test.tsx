@@ -235,3 +235,19 @@ test('a file deleted over ssh shows under its host and plays its exit', async ($
   expect(shown).toContain('package.json')
   await ui.unmount()
 })
+
+test('cd and variables set earlier in a command lead to the files after them', async () => {
+  expect(classifyBash("cd ~/Projects/site && F=web/inc/hooks.php && sed -i '' -e '18s/\\$a->id;/\\$a->id ?? null;/' -e '21s/x/y/' $F && git diff | grep '^[+-] '")).toEqual([
+    { op: 'edit', path: '~/Projects/site/web/inc/hooks.php' },
+  ])
+  expect(classifyBash('cd lib; cat a.ts > ../b.ts; cd -; rm c.ts')).toEqual([
+    { op: 'edit', path: 'lib/../b.ts' },
+    { op: 'view', path: 'lib/a.ts' },
+    { op: 'delete', path: 'c.ts' },
+  ])
+  expect(classifyBash("perl -pi -e 's/a/b/' x.txt y.txt")).toEqual([
+    { op: 'edit', path: 'x.txt' },
+    { op: 'edit', path: 'y.txt' },
+  ])
+  expect(classifyBash("sed -i 's/a/b/' z.txt")).toEqual([{ op: 'edit', path: 'z.txt' }])
+})
