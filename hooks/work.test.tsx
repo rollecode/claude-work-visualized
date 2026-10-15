@@ -200,7 +200,7 @@ test('commands run over ssh, scp and rsync are read as work on that host', async
   expect(classifyBash('cat > notes.md <<EOF\nrm -rf /\nEOF')).toEqual([{ op: 'edit', path: 'notes.md' }])
   expect(remotePath('web1', '/etc/./nginx/../hosts')).toBe('web1:/etc/hosts')
   expect(remotePath('web1', 'logs/app.log')).toBe('web1:/~/logs/app.log')
-  expect(remotePath('web1', '$HOME/x')).toBe(undefined)
+  expect(remotePath('web1', '$HOME/x')).toBe('web1:/~/x')
 })
 
 test('a file deleted over ssh shows under its host and plays its exit', async ($, on) => {
@@ -259,4 +259,22 @@ test('paths outside the session folder go under the home folder or the disk', as
   expect(placeOf('/home/u/site', '/etc/hosts', '/home/u')).toEqual({ file: '/etc/hosts', path: 'local:/etc/hosts' })
   expect(placeOf('/home/u/site', 'node_modules/x.js', '/home/u')).toBe(undefined)
   expect(placeOf('/home/u/site', '$F', '/home/u')).toBe(undefined)
+})
+
+test('a for loop runs its body once per value', async () => {
+  const command = [
+    "cd ~/site && python3 - <<'EOF'",
+    "p='CHANGELOG.md'",
+    "open(p,'w').write(open(p).read())",
+    'EOF',
+    'K="-i $HOME/.ssh/id_rsa -o IdentitiesOnly=yes"; for h in web1 web2; do scp -q $K CHANGELOG.md $h:~/site/CHANGELOG.md && printf "%s ok " $h; done; echo',
+  ].join('\n')
+  expect(classifyBash(command)).toEqual([
+    { op: 'view', path: '~/site/CHANGELOG.md' },
+    { op: 'create', path: '~/site/CHANGELOG.md', host: 'web1' },
+    { op: 'view', path: '~/site/CHANGELOG.md' },
+    { op: 'create', path: '~/site/CHANGELOG.md', host: 'web2' },
+  ])
+  expect(remotePath('web1', '$HOME/x.log')).toBe('web1:/~/x.log')
+  expect(placeOf('/home/u/site', '$HOME/notes.md', '/home/u')).toEqual({ file: '/home/u/notes.md', path: '~:/notes.md' })
 })

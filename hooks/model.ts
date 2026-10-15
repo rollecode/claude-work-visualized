@@ -127,11 +127,12 @@ const VIEWERS = new Set([
 ])
 const DELETERS = new Set(['rm', 'unlink', 'rmdir', 'trash', 'shred'])
 
+/** Shell words: quoted parts join the text around them (`K="-i x"` is one word), quotes removed. */
 function tokenize(segment: string): string[] {
   const out: string[] = []
-  const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g
+  const re = /(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s"']+)+/g
   for (let m = re.exec(segment); m !== null; m = re.exec(segment)) {
-    out.push(m[1] ?? m[2] ?? m[3] ?? '')
+    out.push(m[0].replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_, d?: string, q?: string) => d ?? q ?? ''))
   }
   return out
 }
@@ -147,7 +148,7 @@ export function classifyBash(command: string): Target[] {
   let dir: string | undefined
   const vars = new Map<string, string>()
   const within = (path: string) => (dir === undefined || path.startsWith('/') || path.startsWith('~') ? path : `${dir}/${path}`)
-  for (const { text: segment, heredoc } of segmentsOf(command)) {
+  for (const { text: segment, heredoc } of unrolled(segmentsOf(command))) {
     const start = targets.length
     let words = tokenize(segment.trim()).map(w => expand(w, vars))
     // Redirections: `> file` writes, `< file` reads.
@@ -335,6 +336,35 @@ function segmentsOf(command: string): Segment[] {
   return out
 }
 
+const MAX_LOOP_VALUES = 12
+
+/** `for x in a b; do …; done` as its body once per value, each after `x=value`. */
+function unrolled(segments: readonly Segment[]): Segment[] {
+  const out: Segment[] = []
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i] as Segment
+    const head = /^\s*for\s+(\w+)\s+in\s+(.*)$/.exec(seg.text)
+    if (head === null) {
+      out.push(seg)
+      continue
+    }
+    // The body runs to the matching `done`, nested loops included.
+    const body: Segment[] = []
+    let depth = 1
+    for (i++; i < segments.length; i++) {
+      const s = segments[i] as Segment
+      if (/^\s*for\s/.test(s.text)) depth++
+      if (/^\s*done\b/.test(s.text) && --depth === 0) break
+      body.push({ ...s, text: s.text.replace(/^\s*do\s+/, '') })
+    }
+    const name = head[1] ?? ''
+    for (const value of tokenize(head[2] ?? '').slice(0, MAX_LOOP_VALUES)) {
+      out.push({ text: `${name}='${value.replace(/'/g, '')}'` }, ...unrolled(body))
+    }
+  }
+  return out
+}
+
 /** `ssh [options] host [command]`: what the command does, on that host. */
 function sshTargets(args: readonly string[], heredoc: string | undefined): Target[] {
   let i = 0
@@ -370,7 +400,7 @@ function hostName(raw: string): string | undefined {
 
 /** A remote file as a tree path: `host:` is its top folder, `~` the remote home. */
 export function remotePath(host: string, raw: string): string | undefined {
-  let p = raw.trim()
+  let p = raw.trim().replace(/^\$\{?HOME\}?(?=\/|$)/, '~')
   if (p === '' || /[*?$`(){}]/.test(p)) return undefined
   const isAbsolute = p.startsWith('/')
   if (p === '~' || p.startsWith('~/')) p = p.slice(1)
@@ -402,7 +432,7 @@ export const DISK_ROOT = 'local:'
  * can't be a path, or an ignored folder.
  */
 export function placeOf(root: string, raw: string, home: string | undefined): { file: string; path: string } | undefined {
-  let p = raw.trim()
+  let p = raw.trim().replace(/^\$\{?HOME\}?(?=\/|$)/, '~')
   if (p === '' || /[*?$`(){}]/.test(p)) return undefined
   if (home !== undefined && (p === '~' || p.startsWith('~/'))) p = home + p.slice(1)
   if (p.startsWith('~')) return undefined
