@@ -229,3 +229,43 @@ test('changes the rescan finds after the turn ends are not counted for it', asyn
   expect(shown).toContain('created   0')
   await ui.unmount()
 })
+
+test('only changes that follow Claude\'s own tool calls count on the card', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  const files = [{ name: 'a.ts', kind: 'file' as const }]
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', ($, e) => ({ value: e.path === ROOT ? files.map(f => ({ ...f, size: 1, mtimeMs: 1, isLink: false })) : [] }) as never)
+  on('tool.call', { tool: 'Bash' }, () => {
+    files.push({ name: 'built.js', kind: 'file' }) // what Claude's command made
+    return { result: { stdout: '', stderr: '', interrupted: false } } as never
+  })
+  on('turn.start', () => ({ turnId: 't1' }) as never)
+  on('turn.complete', () => ({ text: 'done' }) as never)
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await clock.advance(2000)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  files.push({ name: 'other.log', kind: 'file' }) // another program, mid-turn
+  await clock.advance(2000)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build' } as never)
+  await clock.advance(500)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: 'done', isAborted: false } as never)
+  await clock.advance(2000)
+
+  const ui = await $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  expect(shown).toContain('other.log')
+  expect(shown).toContain('created   1')
+  await ui.unmount()
+})

@@ -171,7 +171,8 @@ claude-work-visualized/
 - **Shell commands:** files touched by `rm`, `mv`, `cp`, `touch`, `mkdir`, `cat`, `sed -i`, `>`
   and similar are recognised by reading the command text. Anything else is caught by the rescan
   after the command and shown as finished, without a "running" phase.
-- **Changes made outside Claude:** they show up too, animated as if Claude had made them.
+- **Changes made outside Claude:** they show up too, animated as if Claude had made them, but the
+  completion card counts only what Claude's own tool calls changed.
 - **Skipped folders:** `node_modules`, `.git`, `dist`, `build`, caches and virtual environments
   are left out of the tree.
 - **Size limit:** a scan covers at most 2,000 entries, 12 levels deep.
