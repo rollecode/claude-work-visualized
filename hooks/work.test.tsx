@@ -3,6 +3,9 @@ import { expect, mock, test } from 'claude-code/testing'
 import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
 import type { FolderMemory } from './model'
 
+// The test environment has it; the engine's typings leave it out.
+declare function setTimeout(run: () => void, ms: number): unknown
+
 const ROOT = '/proj'
 const FILES: Record<string, { name: string; kind: 'file' | 'dir' }[]> = {
   '': [
@@ -216,7 +219,7 @@ test('a file deleted over ssh shows under its host and plays its exit', async ($
   await $.session.start({ source: 'startup', cwd: ROOT } as never)
   await $.tool.call({ tool: 'Bash', command: "ssh web1 'sed -i s/a/b/ /etc/app.conf && rm /tmp/old.log'" } as never)
   await $.tool.call({ tool: 'Bash', command: 'ls' } as never) // a rescan after the ssh call
-  await new Promise(resolve => setTimeout(resolve, 100))
+  await new Promise<void>(resolve => setTimeout(resolve, 100))
 
   const ui = await $.ui.mount({
     plugin: 'work-visualized',
