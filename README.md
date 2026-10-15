@@ -188,7 +188,8 @@ claude-work-visualized/
   `local:/`. Shell commands are followed through `cd` and `NAME=value`.
 - **Remote work:** only what the command text names is shown; remote folders are not scanned, so
   a change a remote script makes on its own is not seen.
-- **Changes made outside Claude:** they show up too, animated as if Claude had made them.
+- **Changes made outside Claude:** they show up too, animated as if Claude had made them, but the
+  completion card counts only what Claude's own tool calls changed.
 - **Skipped folders:** `node_modules`, `.git`, `dist`, `build`, caches and virtual environments
   are left out of the tree.
 - **Code view:** a shell command's change is replayed only for files the command names, up to 4
