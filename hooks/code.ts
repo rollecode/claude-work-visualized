@@ -34,9 +34,10 @@ const TN = {
 }
 const WRAP = '↳' // marks a row that continues the line above
 const GLOW = 5 // typed characters this close behind the caret glow
-const MIN_TYPING = 900 // ms the typing of even a tiny edit takes, at most MIN_CPS
-const MAX_TYPING = 4500
-const MIN_CPS = 18
+const MIN_TYPING = 650 // ms the typing of even a tiny edit takes, at most MIN_CPS
+const MAX_TYPING = 3500
+const MIN_CPS = 26
+const MS_PER_CHAR = 10
 
 // ---------------------------------------------------------------- lines
 
@@ -271,7 +272,7 @@ function scriptOf(before: readonly string[], after: readonly string[]): Script {
       chars += isInPlace(h) ? changedPart(before[h.a0 + j - h.b0] ?? '', a) + 1 : a.length + 1
     }
   }
-  const budget = clamp(MIN_TYPING + chars * 14, MIN_TYPING, MAX_TYPING)
+  const budget = clamp(MIN_TYPING + chars * MS_PER_CHAR, MIN_TYPING, MAX_TYPING)
   const cps = Math.max(MIN_CPS, (chars / budget) * 1000)
   const typing = (n: number, rate: number) => (n / rate) * 1000
 
