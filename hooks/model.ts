@@ -117,7 +117,8 @@ export function withoutPath(tree: readonly TreeEntry[], path: string): TreeEntry
 
 // ---------------------------------------------------------------- bash
 
-export type Target = { op: Op; path: string }
+/** `host` is set for a path on another machine, reached over ssh, scp or rsync. */
+export type Target = { op: Op; path: string; host?: string }
 
 const VIEWERS = new Set([
   'cat', 'head', 'tail', 'less', 'more', 'bat', 'wc', 'grep', 'rg', 'ag', 'diff', 'file', 'stat',
@@ -142,8 +143,7 @@ function tokenize(segment: string): string[] {
  */
 export function classifyBash(command: string): Target[] {
   const targets: Target[] = []
-  const segments = command.split(/&&|\|\||;|\||\n/)
-  for (const segment of segments) {
+  for (const { text: segment, heredoc } of segmentsOf(command)) {
     let words = tokenize(segment.trim())
     // Redirections: `> file` writes, `< file` reads.
     const rest: string[] = []
@@ -153,6 +153,11 @@ export function classifyBash(command: string): Target[] {
       if (redirect) {
         const target = redirect[2] !== '' ? redirect[2] : words[++i]
         if (target && !target.startsWith('&') && target !== '/dev/null') targets.push({ op: 'edit', path: target })
+        continue
+      }
+      // A heredoc's marker; its body was set apart by segmentsOf().
+      if (/^<<-?/.test(w)) {
+        if (/^<<-?$/.test(w)) i++
         continue
       }
       if (w === '<' && words[i + 1]) {
@@ -171,8 +176,18 @@ export function classifyBash(command: string): Target[] {
       cmd = args[0]
       args = args.slice(1)
     }
+    if (cmd === 'ssh') {
+      targets.push(...sshTargets(args, heredoc))
+      continue
+    }
+    if (SHELLS.has(cmd) && heredoc !== undefined) {
+      targets.push(...classifyBash(heredoc))
+      continue
+    }
     const operands = args.filter(a => !a.startsWith('-') && !/[*?$`(){}]/.test(a))
-    if (DELETERS.has(cmd)) {
+    if (cmd === 'scp' || cmd === 'rsync') {
+      targets.push(...copyTargets(operands))
+    } else if (DELETERS.has(cmd)) {
       for (const p of operands) targets.push({ op: 'delete', path: p })
     } else if (cmd === 'touch' || cmd === 'mkdir') {
       for (const p of operands) targets.push({ op: 'create', path: p })
@@ -195,6 +210,134 @@ export function classifyBash(command: string): Target[] {
     }
   }
   return targets
+}
+
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
+// ssh options that take a value: `-p 22`, `-i key`, `-o Option=x`, ...
+const SSH_VALUE_FLAGS = 'BbcDEeFIiJLlmOoPpQRSWw'
+const HEREDOC = /<<(?!<)-?\s*(['"]?)([\w-]+)\1/
+
+type Segment = { text: string; heredoc?: string }
+
+/**
+ * A command split on `&&`, `||`, `;`, `|` and new lines outside quotes, so
+ * `ssh host 'a && b'` stays one segment. A heredoc's body is kept apart on
+ * the segment that opened it instead of being read as commands.
+ */
+function segmentsOf(command: string): Segment[] {
+  const out: Segment[] = []
+  const lines = command.split('\n')
+  let text = ''
+  let quote: string | undefined
+  const close = () => {
+    if (text.trim() !== '') out.push({ text })
+    text = ''
+  }
+  for (let li = 0; li < lines.length; li++) {
+    let line = lines[li] ?? ''
+    const isContinued = quote === undefined && /(^|[^\\])\\$/.test(line)
+    if (isContinued) line = line.slice(0, -1)
+    const first = out.length
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i] ?? ''
+      const after = line[i + 1]
+      if (quote !== undefined) {
+        if (ch === '\\' && quote === '"') {
+          text += ch + (after ?? '')
+          i++
+          continue
+        }
+        if (ch === quote) quote = undefined
+        text += ch
+        continue
+      }
+      if (ch === '\\') {
+        text += ch + (after ?? '')
+        i++
+      } else if (ch === '"' || ch === "'") {
+        quote = ch
+        text += ch
+      } else if (ch === ';' || ch === '|' || (ch === '&' && after === '&')) {
+        if (after === ch) i++
+        close()
+      } else {
+        text += ch
+      }
+    }
+    if (quote !== undefined) {
+      text += '\n'
+      continue
+    }
+    if (isContinued) {
+      text += ' '
+      continue
+    }
+    close()
+    const opener = out.slice(first).find(s => HEREDOC.test(s.text))
+    const delimiter = opener === undefined ? undefined : HEREDOC.exec(opener.text)?.[2]
+    if (opener === undefined || delimiter === undefined) continue
+    const body: string[] = []
+    while (li + 1 < lines.length && (lines[li + 1] ?? '').trim() !== delimiter) body.push(lines[++li] ?? '')
+    li++
+    opener.heredoc = body.join('\n')
+  }
+  close()
+  return out
+}
+
+/** `ssh [options] host [command]`: what the command does, on that host. */
+function sshTargets(args: readonly string[], heredoc: string | undefined): Target[] {
+  let i = 0
+  while (i < args.length && (args[i] ?? '').startsWith('-')) {
+    const flags = (args[i] ?? '').slice(1)
+    const at = [...flags].findIndex(f => SSH_VALUE_FLAGS.includes(f))
+    i += at >= 0 && at === flags.length - 1 ? 2 : 1
+  }
+  const host = hostName(args[i] ?? '')
+  if (host === undefined) return []
+  const remote = args.slice(i + 1).join(' ')
+  // `ssh host bash -s <<EOF` runs the heredoc's lines on the host.
+  const runsShell = tokenize(remote).filter(w => !w.startsWith('-') && w !== 'sudo').every(w => SHELLS.has(baseName(w)))
+  const script = heredoc !== undefined && runsShell ? heredoc : remote
+  return classifyBash(script).map(t => ({ ...t, host: t.host ?? host }))
+}
+
+/** `scp` and `rsync`: sources are read, the last operand written; `host:path` is remote. */
+function copyTargets(operands: readonly string[]): Target[] {
+  if (operands.length < 2) return []
+  const side = (raw: string, op: Op): Target => {
+    const m = /^([^/.:][^/:]*):(.*)$/.exec(raw)
+    const host = m === null ? undefined : hostName(m[1] ?? '')
+    return host === undefined ? { op, path: raw } : { op, path: m?.[2] ?? '', host }
+  }
+  return [...operands.slice(0, -1).map(p => side(p, 'view')), side(operands[operands.length - 1] ?? '', 'create')]
+}
+
+function hostName(raw: string): string | undefined {
+  const name = raw.slice(raw.lastIndexOf('@') + 1)
+  return /^[\w.-]+$/.test(name) ? name : undefined
+}
+
+/** A remote file as a tree path: `host:` is its top folder, `~` the remote home. */
+export function remotePath(host: string, raw: string): string | undefined {
+  let p = raw.trim()
+  if (p === '' || /[*?$`(){}]/.test(p)) return undefined
+  const isAbsolute = p.startsWith('/')
+  if (p === '~' || p.startsWith('~/')) p = p.slice(1)
+  const parts: string[] = []
+  for (const part of p.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      if (parts.length === 0) return undefined
+      parts.pop()
+    } else parts.push(part)
+  }
+  if (parts.length === 0) return undefined
+  return `${host}:/${isAbsolute ? '' : '~/'}${parts.join('/')}`
+}
+
+export function isRemote(path: string): boolean {
+  return /^[\w.-]+:\//.test(path)
 }
 
 // ---------------------------------------------------------------- diffs
