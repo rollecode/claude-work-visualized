@@ -201,18 +201,24 @@ export function classifyBash(command: string): Target[] {
 
 export type Diff = { created: TreeEntry[]; deleted: TreeEntry[]; edited: string[] }
 
-export function diffTrees(before: readonly TreeEntry[], after: readonly TreeEntry[]): Diff {
+/** The folders each scan listed in full: only their children can be known to be new or gone. */
+export type Listed = { before: ReadonlySet<string>; after: ReadonlySet<string> }
+
+export function diffTrees(before: readonly TreeEntry[], after: readonly TreeEntry[], listed?: Listed): Diff {
   const old = new Map(before.map(t => [t.p, t]))
   const now = new Map(after.map(t => [t.p, t]))
+  // A path in a folder the scan cut off may only have slid in or out of its window.
+  const wasListed = (p: string) => listed === undefined || listed.before.has(parentOf(p))
+  const isListed = (p: string) => listed === undefined || listed.after.has(parentOf(p))
   const created: TreeEntry[] = []
   const edited: string[] = []
   for (const t of after) {
     const was = old.get(t.p)
-    if (was === undefined) created.push(t)
-    else if (!t.d && was.m !== 0 && t.m !== was.m) edited.push(t.p)
+    if (was === undefined && wasListed(t.p)) created.push(t)
+    else if (was !== undefined && !t.d && was.m !== 0 && t.m !== was.m) edited.push(t.p)
   }
   // A deleted folder shows as one ghost, not one per file inside it.
-  const deleted = before.filter(t => !now.has(t.p) && (parentOf(t.p) === '' || now.has(parentOf(t.p))))
+  const deleted = before.filter(t => !now.has(t.p) && (parentOf(t.p) === '' || now.has(parentOf(t.p))) && isListed(t.p))
   return { created, deleted, edited }
 }
 

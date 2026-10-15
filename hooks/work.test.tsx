@@ -175,3 +175,23 @@ test('a Read shows in the pane as Claude viewing that file', async ($, on) => {
   release()
   await reading
 })
+
+test('paths sliding in or out of a cut-off scan are not created or deleted', async () => {
+  const before = [
+    { p: 'a', d: true, m: 0 },
+    { p: 'a/1.ts', d: false, m: 1 },
+    { p: 'b', d: true, m: 0 },
+    { p: 'b/x.ts', d: false, m: 1 },
+  ]
+  // A new file in `a` pushed `b/x.ts` past the scan's limit, and `b` came back cut off.
+  const after = [
+    { p: 'a', d: true, m: 0 },
+    { p: 'a/0.ts', d: false, m: 1 },
+    { p: 'a/1.ts', d: false, m: 1 },
+    { p: 'b', d: true, m: 0 },
+    { p: 'b/w.ts', d: false, m: 1 },
+  ]
+  const diff = diffTrees(before, after, { before: new Set(['', 'a']), after: new Set(['', 'a']) })
+  expect(diff.created.map(t => t.p)).toEqual(['a/0.ts'])
+  expect(diff.deleted.map(t => t.p)).toEqual([])
+})
