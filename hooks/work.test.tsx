@@ -195,3 +195,37 @@ test('paths sliding in or out of a cut-off scan are not created or deleted', asy
   expect(diff.created.map(t => t.p)).toEqual(['a/0.ts'])
   expect(diff.deleted.map(t => t.p)).toEqual([])
 })
+
+test('changes the rescan finds after the turn ends are not counted for it', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  const files = [{ name: 'a.ts', kind: 'file' as const }]
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', ($, e) => ({ value: e.path === ROOT ? files.map(f => ({ ...f, size: 1, mtimeMs: 1, isLink: false })) : [] }) as never)
+  on('turn.start', () => ({ turnId: 't1' }) as never)
+  on('turn.complete', () => ({ text: 'done' }) as never)
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await clock.advance(2000)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: 'done', isAborted: false } as never)
+  files.push({ name: 'b.ts', kind: 'file' }) // a git hook, an editor: not Claude
+  await clock.advance(3000)
+
+  const ui = await $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  expect(shown).toContain('TASK COMPLETE')
+  expect(shown).toContain('b.ts')
+  expect(shown).toContain('created   0')
+  await ui.unmount()
+})

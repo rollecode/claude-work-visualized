@@ -97,7 +97,9 @@ function rescan($: EngineInterface, claimed: ReadonlySet<string>): Promise<unkno
         return out
       })
     }
+    // Only a turn's own changes count on its card; later ones still animate in the tree.
     await update($, turn, info => {
+      if (info.phase !== 'working') return info
       let t = info
       for (const e of born) t = counted(t, 'create', e.p)
       for (const p of changed) t = counted(t, 'edit', p)
