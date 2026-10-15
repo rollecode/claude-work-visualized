@@ -97,6 +97,12 @@ hooks' worker Prism would otherwise answer the engine's messages.
 
 From 96 columns the code view sits beside the tree; narrower, it goes under the tree.
 
+A clip also keeps the whole file after the edit (`file`) and the lines it changed (`changed`). A
+`ui.scroll` hook takes the person's wheel, touchpad and scroll keys over the code view:
+`browseAfter()` moves a top line through the file (2 lines a tick, 1 a key) and `fileLines()`
+draws from there. A scroll over the tree goes on to the engine. Claude's next edit, or 20 s
+without scrolling, returns the view to following the replay.
+
 ## Scanning and diffing
 
 `scanTree()` lists the project breadth-first through `$.fs.list`, using absolute paths under the

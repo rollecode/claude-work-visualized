@@ -199,8 +199,12 @@ export function clipOf(path: string, before: string, after: string, at: number):
     more: left + Math.max(0, last.b1 + ctx - bEnd),
     adds: all.reduce((n, h) => n + h.b1 - h.b0, 0),
     dels: all.reduce((n, h) => n + h.a1 - h.a0, 0),
+    file: b.map(cellSafe),
+    changed: all.flatMap(h => range(h.b0 + 1, h.b1 + 1)),
   }
 }
+
+export const clipKey = (clip: Clip) => `${clip.path}\n${clip.at}`
 
 /** Queues a clip behind those still playing, unless it would fall too far behind. */
 export function enqueue(clips: readonly Clip[], clip: Clip, now: number): Clip[] {
@@ -482,12 +486,12 @@ const smooth = (t: number) => {
   return k * k * (3 - 2 * k)
 }
 
-/** `── ± src/a.ts:12  +3 -1 ─────`, the code view's rule. */
-export function codeRule(clip: Clip, columns: number): Seg[] {
+/** `── ± src/a.ts:12  +3 -1 ─────`, the code view's rule; while scrolled, the lines in view. */
+export function codeRule(clip: Clip, columns: number, view?: { from: number; to: number }): Seg[] {
   const isNew = clip.first === 1 && clip.before.length === 0
   const op = isNew ? 'create' : 'edit'
-  const where = `:${clip.first}`
-  const stats = `  +${clip.adds}` + (clip.dels > 0 ? ` -${clip.dels}` : '')
+  const where = view === undefined ? `:${clip.first}` : ''
+  const stats = view === undefined ? `  +${clip.adds}` + (clip.dels > 0 ? ` -${clip.dels}` : '') : `  lines ${view.from}-${view.to} / ${clip.file.length}`
   const room = Math.max(4, columns - 3 - 2 - where.length - stats.length - 2)
   const path = clip.path.length > room ? '…' + clip.path.slice(clip.path.length - room + 1) : clip.path
   const segs: Seg[] = [
@@ -495,9 +499,13 @@ export function codeRule(clip: Clip, columns: number): Seg[] {
     { t: ICON[op] + ' ', c: COLOR[op], b: true },
     { t: path, c: BASE, b: true },
     { t: where, c: MUTED },
-    { t: `  +${clip.adds}`, c: COLOR.create },
   ]
-  if (clip.dels > 0) segs.push({ t: ` -${clip.dels}`, c: COLOR.delete })
+  if (view !== undefined) {
+    segs.push({ t: stats, c: MUTED })
+  } else {
+    segs.push({ t: `  +${clip.adds}`, c: COLOR.create })
+    if (clip.dels > 0) segs.push({ t: ` -${clip.dels}`, c: COLOR.delete })
+  }
   const used = segs.reduce((n, s) => n + s.t.length, 0)
   segs.push({ t: ' ' + '─'.repeat(Math.max(0, columns - used - 2)), c: FAINT })
   return segs
@@ -599,4 +607,68 @@ function rowSegs(v: Visual, numW: number, codeW: number, fade: number, colours: 
   }
   if (bg !== undefined && used < codeW) segs.push({ t: ' '.repeat(codeW - used), bg })
   return segs
+}
+
+/** Where the code view sits in the pane's body, for telling a wheel tick over it from one over the tree. */
+export type CodeArea = { column: number; row: number; columns: number; rows: number }
+
+export function isOverCode(pointer: { column: number; row: number }, area: CodeArea): boolean {
+  return pointer.column >= area.column && pointer.column < area.column + area.columns && pointer.row >= area.row && pointer.row < area.row + area.rows
+}
+
+/** The person's place in a clip's file while they scroll it: its top line, and when they last moved. */
+export type Browse = { key: string; top: number; at: number }
+
+const WHEEL_LINES = 2 // lines one wheel or touchpad tick moves the file
+
+/**
+ * Where a scroll leaves the person in the code view's file, or undefined
+ * when it isn't theirs to take: no code view, or a pointer over the tree.
+ * Keys (no pointer) move a line each, a wheel or touchpad tick WHEEL_LINES.
+ */
+export function browseAfter(
+  current: Browse | undefined,
+  clip: Clip | undefined,
+  area: CodeArea | undefined,
+  scroll: { by: number; pointer?: { column: number; row: number } },
+  now: number,
+): Browse | undefined {
+  if (clip === undefined || area === undefined) return undefined
+  if (scroll.pointer !== undefined && !isOverCode(scroll.pointer, area)) return undefined
+  const top = current?.key === clipKey(clip) ? current.top : clip.first - 1
+  const lines = scroll.pointer === undefined ? scroll.by : scroll.by * WHEEL_LINES
+  return { key: clipKey(clip), top: Math.max(0, top + lines), at: now }
+}
+
+const COLOUR_MARGIN = 40 // lines highlighted around the view, so a string or comment opened above still reads right
+
+/**
+ * The whole file after the edit, from line `top` (0-based) down, wrapped,
+ * the edit's lines marked: what the person scrolls through. `top` comes back
+ * clamped, with the line range in view for the rule.
+ */
+export function fileLines(clip: Clip, columns: number, rows: number, top: number): { lines: Seg[][]; top: number; from: number; to: number } {
+  const lines = clip.file
+  const numW = String(Math.max(1, lines.length)).length
+  const codeW = Math.max(4, columns - numW - 3)
+  const first = clamp(Math.round(top), 0, Math.max(0, lines.length - rows))
+  const from = Math.max(0, first - COLOUR_MARGIN)
+  const slice = lines.slice(from, Math.min(lines.length, first + rows + COLOUR_MARGIN))
+  const colours = coloursOf(slice.join('\n'), grammarOf(clip.path))
+  const changed = new Set(clip.changed)
+
+  const out: Seg[][] = []
+  let offset = slice.slice(0, first - from).reduce((n, l) => n + l.length + 1, 0)
+  let last = first
+  for (let i = first; i < lines.length && out.length < rows; i++) {
+    const t = lines[i] ?? ''
+    const row: CodeRow = changed.has(i + 1) ? { k: 'ctx', t, r: 'mod' } : { k: 'ctx', t }
+    const pieces = Math.max(1, Math.ceil(t.length / codeW))
+    for (let k = 0; k < pieces && out.length < rows; k++) {
+      out.push(rowSegs({ row, no: i + 1, from: k * codeW, to: Math.min(t.length, (k + 1) * codeW), isFirst: k === 0, offset }, numW, codeW, 0, colours))
+    }
+    offset += t.length + 1
+    last = i
+  }
+  return { lines: out, top: first, from: first + 1, to: last + 1 }
 }

@@ -41,6 +41,9 @@ deletes it, so you can see at a glance where Claude is working right now.
   columns wide. `/watch` opens it at any width.
 - Closing the pane by hand also turns watching off. The next `/watch` reopens it.
 - While a tool runs, the status line also shows the current operation, e.g. `± edit src/app.ts`.
+- Scroll over the code view (mouse wheel, touchpad, or the arrow and page keys while the pane is
+  focused) to move through the whole edited file; changed lines keep their gutter mark. Claude's
+  next edit brings the view back to following it.
 
 ## Visual language
 

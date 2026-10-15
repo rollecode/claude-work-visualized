@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HOLD, cellSafe, clipOf, codeLines, coloursOf, currentClip, enqueue, frameOf, grammarOf, hunksOf } from './code'
+import { HOLD, browseAfter, cellSafe, clipOf, codeLines, coloursOf, currentClip, enqueue, fileLines, frameOf, grammarOf, hunksOf, isOverCode } from './code'
 
 const ROOT = '/proj'
 const lines = (n: number, f = (i: number) => `line ${i}`) => Array.from({ length: n }, (_, i) => f(i + 1)).join('\n') + '\n'
@@ -152,4 +152,34 @@ test('a long line wraps instead of running off the pane', async () => {
   expect(shown.some(l => l.includes('↳'))).toBe(true)
   expect(shown.join('').replace(/[^x]/g, '').length).toBe(70)
   for (const l of shown) expect([...l].length).toBeLessThanOrEqual(40)
+})
+
+test('the whole edited file can be scrolled, its changed lines marked', async () => {
+  const before = lines(200)
+  const after = before.replace('line 150\n', 'line one-fifty\n')
+  const clip = clipOf('src/a.ts', before, after, 0)
+  if (clip === undefined) throw new Error('no clip')
+  expect(clip.file).toHaveLength(200)
+  expect(clip.changed).toEqual([150])
+  const top = fileLines(clip, 40, 10, 0)
+  expect([top.from, top.to]).toEqual([1, 10])
+  expect(text(top.lines[0] ?? [])).toContain('line 1')
+  const around = fileLines(clip, 40, 10, 145)
+  const marked = around.lines.find(l => text(l).includes('one-fifty'))
+  expect(marked?.some(seg => seg.t === '▎')).toBe(true)
+  expect(fileLines(clip, 40, 10, 9999).to).toBe(200) // past the end it stops at the last screen
+  expect(isOverCode({ column: 45, row: 3 }, { column: 40, row: 0, columns: 30, rows: 12 })).toBe(true)
+  expect(isOverCode({ column: 10, row: 3 }, { column: 40, row: 0, columns: 30, rows: 12 })).toBe(false)
+})
+
+test('a scroll over the code view moves the file, one over the tree moves the pane', async () => {
+  const clip = clipOf('src/a.ts', lines(200), lines(200).replace('line 150\n', 'x\n'), 0)
+  if (clip === undefined) throw new Error('no clip')
+  const area = { column: 40, row: 0, columns: 30, rows: 12 }
+  expect(browseAfter(undefined, clip, area, { by: 1, pointer: { column: 5, row: 2 } }, 1)).toBe(undefined)
+  expect(browseAfter(undefined, undefined, area, { by: 1 }, 1)).toBe(undefined)
+  const first = browseAfter(undefined, clip, area, { by: 1, pointer: { column: 50, row: 2 } }, 1)
+  expect(first?.top).toBe(clip.first - 1 + 2) // a touchpad tick moves two lines
+  expect(browseAfter(first, clip, area, { by: -1 }, 2)?.top).toBe(clip.first - 1 + 1) // a key moves one
+  expect(browseAfter(first, clip, area, { by: -999, pointer: { column: 50, row: 2 } }, 3)?.top).toBe(0)
 })

@@ -2,7 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Activity, Clip, Ghost, Op, TreeEntry, TurnInfo } from '../types'
-import { MAX_BYTES, clipOf, codeLines, codeRule, currentClip, enqueue, isClipDone } from './code'
+import { HOLD, MAX_BYTES, browseAfter, clipKey, clipOf, codeLines, codeRule, currentClip, enqueue, fileLines, isClipDone } from './code'
+import type { Browse, CodeArea } from './code'
 import {
   COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
   buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, legendLines, mix,
@@ -31,6 +32,9 @@ const clips = atom({ plugin: 'work-visualized', key: 'clips' } as const, [] as C
 const folders: FolderMemory = new Map()
 let scroll = 0
 let codeScroll = 0
+let browse: Browse | undefined // the person scrolling through the edited file
+let codeArea: CodeArea | undefined // where the code view was drawn last frame
+let shownClip: Clip | undefined
 let animateUntil = 0
 let isWatching = true // mirrors the watching atom for synchronous checks
 let scanning: Promise<unknown> = Promise.resolve()
@@ -205,7 +209,8 @@ export const register: Register = on => {
           })
         }
         const c = await read($, clips)
-        if (c.some(x => isClipDone(x, t))) await update($, clips, list => list.filter(x => !isClipDone(x, t)))
+        const isKept = (x: Clip) => !isClipDone(x, t) || isBrowsed(x, t)
+        if (c.some(x => !isKept(x))) await update($, clips, list => list.filter(isKept))
         if (!isAnimating(a, g, await read($, turn), t) && t > animateUntil - T.trail) animateUntil = Math.min(animateUntil, t + 1500)
       })()
     })
@@ -341,6 +346,15 @@ export const register: Register = on => {
     return ran
   })
 
+  // The wheel, a touchpad or the scroll keys over the code view move through the edited file.
+  on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const moved = browseAfter(browse, shownClip, codeArea, e, await $.clock.now())
+    if (moved === undefined) return next(e)
+    browse = moved
+    $.ui.invalidate('ui.render')
+    return {}
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const now = await $.clock.now()
@@ -351,7 +365,13 @@ export const register: Register = on => {
     const root = (await $.session.cwd()).replace(/\/+$/, '').split('/').pop() ?? ''
     const paneColumns = Math.max(24, (e.props.bodyColumns ?? 40) - 1)
     const height = Math.max(8, e.props.scroll?.bodyRows ?? (e.viewport?.rows ?? 30) - 3)
-    const clip = currentClip(await read($, clips), now)
+    const list = await read($, clips)
+    const latest = currentClip(list, now)
+    // A file the person is scrolling stays until Claude's next edit, or until they leave it a while.
+    const browsed = list.find(x => isBrowsed(x, now))
+    if (browse !== undefined && (browsed === undefined || (latest !== undefined && clipKey(latest) !== browse.key))) browse = undefined
+    const clip = browse !== undefined ? browsed : latest
+    shownClip = clip
 
     const line = (segs: Seg[], key: string) => (
       <Box key={key} flexDirection="row" height={1} backgroundColor={PANE_BG}>
@@ -370,12 +390,23 @@ export const register: Register = on => {
       : isSplit
         ? height - 1
         : Math.max(3, Math.min(Math.max(clip.before.length, clip.after.length) + 2, Math.floor(height * 0.45)))
-    const codeView = clip === undefined ? { lines: [], scroll: 0 } : codeLines(clip, now, codeColumns, codeRows, codeScroll)
-    codeScroll = codeView.scroll
+    let view: { from: number; to: number } | undefined
+    let codeSegs: Seg[][] = []
+    if (clip !== undefined && browse !== undefined) {
+      const shown = fileLines(clip, codeColumns, codeRows, browse.top)
+      browse = { ...browse, top: shown.top }
+      view = { from: shown.from, to: shown.to }
+      codeSegs = shown.lines
+    } else if (clip !== undefined) {
+      const replay = codeLines(clip, now, codeColumns, codeRows, codeScroll)
+      codeScroll = replay.scroll
+      codeSegs = replay.lines
+    }
+    codeArea = clip === undefined ? undefined : { column: isSplit ? treeColumns + 2 : 0, row: 0, columns: codeColumns, rows: codeRows + 1 }
     const code = clip !== undefined && (
       <Box flexDirection="column" width={codeColumns} backgroundColor={PANE_BG}>
-        {line(codeRule(clip, codeColumns), 'cr')}
-        {codeView.lines.map((segs, i) => line(segs, `c${i}`))}
+        {line(codeRule(clip, codeColumns, view), 'cr')}
+        {codeSegs.map((segs, i) => line(segs, `c${i}`))}
       </Box>
     )
 
@@ -407,6 +438,10 @@ export const register: Register = on => {
       const above = scroll
       const below = Math.max(0, rows.length - scroll - room)
       const fileCount = entries.filter(t => !t.d).length
+      // Under the tree, the code view starts below the header, the tree and the card.
+      if (under !== undefined && codeArea !== undefined) {
+        codeArea = { ...codeArea, row: 3 + visible.length + (below > 0 ? 1 : 0) + (summary.length > 0 ? summary.length + 2 : 0) }
+      }
       const age = now - info.at
       const card = Math.min(smoothIn(age / 500), info.phase === 'complete' && age > T.summary - 1500 ? Math.max(0, (T.summary - age) / 1500) : 1)
 
@@ -431,6 +466,9 @@ export const register: Register = on => {
     }
   })
 }
+
+/** Whether the person is still scrolling through this clip's file. */
+const isBrowsed = (clip: Clip, now: number) => browse !== undefined && browse.key === clipKey(clip) && now - browse.at < HOLD
 
 const smoothIn = (t: number) => {
   const k = Math.min(1, Math.max(0, t))
