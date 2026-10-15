@@ -37,6 +37,10 @@ export type Clip = {
   more: number
   adds: number
   dels: number
+  /** The whole file after the edit, for scrolling through it. */
+  file: string[]
+  /** Line numbers (from 1) the edit added or changed. */
+  changed: number[]
 }
 
 declare module 'claude-code' {

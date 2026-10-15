@@ -4,6 +4,7 @@
 * Add syntax highlighting in Tokyo Night colours
 * Wrap long lines, smooth the code replay
 * Speed up typing in the code view
+* Add scrolling through the edited file
 * Change pane background to black
 * Add ssh, scp and rsync work to the tree
 * Show files outside the session folder

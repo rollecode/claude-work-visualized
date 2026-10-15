@@ -49,6 +49,9 @@ deletes it, so you can see at a glance where Claude is working right now.
 - While a tool runs, the status line also shows the current operation, e.g. `± edit src/app.ts`.
 - While the pane is shown, an edit's result in the chat is one line (`± Edited src/app.ts +3 -1`),
   since the pane replays the diff. With the pane closed, or after `/diffs`, the full diff shows.
+- Scroll over the code view (mouse wheel, touchpad, or the arrow and page keys while the pane is
+  focused) to move through the whole edited file; changed lines keep their gutter mark. Claude's
+  next edit brings the view back to following it.
 
 ## Visual language
 
