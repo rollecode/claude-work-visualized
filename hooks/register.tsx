@@ -18,6 +18,7 @@ const FRAME_MS = 33 // ~30 fps while anything moves, the terminal's cap for a sh
 const POLL_MS = 1500 // how often the project is rescanned for changes made outside tool calls
 const SPLIT_COLUMNS = 96 // from this wide the code view sits beside the tree, else under it
 const EDITORS = new Set(['Edit', 'MultiEdit', 'Write'])
+const PANE_BG = '#000000'
 
 const tree = atom({ plugin: 'work-visualized', key: 'tree' } as const, [] as TreeEntry[])
 const activity = atom({ plugin: 'work-visualized', key: 'activity' } as const, {} as Record<string, Activity>)
@@ -353,9 +354,9 @@ export const register: Register = on => {
     const clip = currentClip(await read($, clips), now)
 
     const line = (segs: Seg[], key: string) => (
-      <Box key={key} flexDirection="row" height={1}>
+      <Box key={key} flexDirection="row" height={1} backgroundColor={PANE_BG}>
         {merge(segs).map(s => (
-          <Text color={s.c} backgroundColor={s.bg} bold={s.b} dimColor={s.dim} strikethrough={s.s} wrap="truncate">
+          <Text color={s.c} backgroundColor={s.bg ?? PANE_BG} bold={s.b} dimColor={s.dim} strikethrough={s.s} wrap="truncate">
             {s.t}
           </Text>
         ))}
@@ -372,7 +373,7 @@ export const register: Register = on => {
     const codeView = clip === undefined ? { lines: [], scroll: 0 } : codeLines(clip, now, codeColumns, codeRows, codeScroll)
     codeScroll = codeView.scroll
     const code = clip !== undefined && (
-      <Box flexDirection="column" width={codeColumns}>
+      <Box flexDirection="column" width={codeColumns} backgroundColor={PANE_BG}>
         {line(codeRule(clip, codeColumns), 'cr')}
         {codeView.lines.map((segs, i) => line(segs, `c${i}`))}
       </Box>
@@ -380,9 +381,9 @@ export const register: Register = on => {
 
     if (isSplit) {
       return (
-        <Box flexDirection="row" width={paneColumns}>
+        <Box flexDirection="row" width={paneColumns} flexGrow={1} backgroundColor={PANE_BG}>
           {mapView(treeColumns)}
-          <Box width={2} />
+          <Box width={2} backgroundColor={PANE_BG} />
           {code}
         </Box>
       )
@@ -410,19 +411,19 @@ export const register: Register = on => {
       const card = Math.min(smoothIn(age / 500), info.phase === 'complete' && age > T.summary - 1500 ? Math.max(0, (T.summary - age) / 1500) : 1)
 
       return (
-        <Box flexDirection="column" width={columns}>
+        <Box flexDirection="column" width={columns} flexGrow={1} backgroundColor={PANE_BG}>
           {line(headerLine(now, focus !== undefined || info.phase === 'working', root), 'h')}
           {line(statusLine(act, info, now, fileCount, columns), 's')}
           {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1')}
           {rows.length === 0 ? line([{ t: ' scanning…', c: MUTED }], 'empty') : visible.map(r => line(r.segs, r.key))}
           {below > 0 && line([{ t: `   ↓ ${below} more`, c: FAINT }], 'down')}
           {summary.length > 0 && (
-            <Box flexDirection="column" borderStyle="round" borderColor={mix(FAINT, COLOR.create, card * 0.8)} paddingX={1}>
+            <Box flexDirection="column" borderStyle="round" borderColor={mix(FAINT, COLOR.create, card * 0.8)} paddingX={1} backgroundColor={PANE_BG}>
               {summary.map((segs, i) => line(segs, `sum${i}`))}
             </Box>
           )}
           {under}
-          <Box flexGrow={1} />
+          <Box flexGrow={1} backgroundColor={PANE_BG} />
           {rule('legend', 'r2')}
           {legend.map((segs, i) => line(segs, `leg${i}`))}
         </Box>
