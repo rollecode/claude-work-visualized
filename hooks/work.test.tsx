@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
+import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, placeOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
 import type { FolderMemory } from './model'
 
 // The test environment has it; the engine's typings leave it out.
@@ -250,4 +250,13 @@ test('cd and variables set earlier in a command lead to the files after them', a
     { op: 'edit', path: 'y.txt' },
   ])
   expect(classifyBash("sed -i 's/a/b/' z.txt")).toEqual([{ op: 'edit', path: 'z.txt' }])
+})
+
+test('paths outside the session folder go under the home folder or the disk', async () => {
+  expect(placeOf('/home/u/site', 'src/a.ts', '/home/u')).toEqual({ file: '/home/u/site/src/a.ts', path: 'src/a.ts' })
+  expect(placeOf('/home/u/site', '~/Projects/other/x.php', '/home/u')).toEqual({ file: '/home/u/Projects/other/x.php', path: '~:/Projects/other/x.php' })
+  expect(placeOf('/home/u/site', '../other/y.php', '/home/u')).toEqual({ file: '/home/u/other/y.php', path: '~:/other/y.php' })
+  expect(placeOf('/home/u/site', '/etc/hosts', '/home/u')).toEqual({ file: '/etc/hosts', path: 'local:/etc/hosts' })
+  expect(placeOf('/home/u/site', 'node_modules/x.js', '/home/u')).toBe(undefined)
+  expect(placeOf('/home/u/site', '$F', '/home/u')).toBe(undefined)
 })

@@ -174,6 +174,8 @@ claude-work-visualized/
 - **Shell commands:** files touched by `rm`, `mv`, `cp`, `touch`, `mkdir`, `cat`, `sed -i`, `>`
   and similar are recognised by reading the command text. Anything else is caught by the rescan
   after the command and shown as finished, without a "running" phase.
+- **Other folders:** files outside the session folder show under `~:/` (your home folder) or
+  `local:/`. Shell commands are followed through `cd` and `NAME=value`.
 - **Remote work:** only what the command text names is shown; remote folders are not scanned, so
   a change a remote script makes on its own is not seen.
 - **Changes made outside Claude:** they show up too, animated as if Claude had made them.

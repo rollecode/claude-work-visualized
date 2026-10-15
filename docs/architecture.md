@@ -65,6 +65,11 @@ recognises:
 Only words that name a path already in the tree count (except creates), so a pattern or a flag is
 never mistaken for a file.
 
+`cd` and `NAME=value` earlier in a command carry to the commands after them, so
+`cd ~/site && F=a.php && sed -i '' -e … $F` names `~/site/a.php`. `placeOf()` puts a path
+outside the session folder under `~:/` (the home folder) or `local:/`; like remote paths, those
+are checked with `$.fs.stat` instead of the scan and kept across rescans.
+
 Commands are split outside quotes, and a heredoc's body is kept apart from the commands, so
 `ssh host 'a && b'` stays one command and the text a heredoc writes is never read as commands.
 

@@ -386,8 +386,43 @@ export function remotePath(host: string, raw: string): string | undefined {
   return `${host}:/${isAbsolute ? '' : '~/'}${parts.join('/')}`
 }
 
-export function isRemote(path: string): boolean {
-  return /^[\w.-]+:\//.test(path)
+/** Whether a tree path is one the scan never sees: on another host, or outside the session folder. */
+export function isUnscanned(path: string): boolean {
+  return /^[\w.~-]+:\//.test(path)
+}
+
+/** Top folders for files outside the session folder: under the home folder, and anywhere else. */
+export const HOME_ROOT = '~:'
+export const DISK_ROOT = 'local:'
+
+/**
+ * Where a path a tool names sits: the file on disk and its tree path. Inside
+ * the session folder the tree path is relative; outside it goes under
+ * `~:/` or `local:/`. Undefined for the session folder itself, a word that
+ * can't be a path, or an ignored folder.
+ */
+export function placeOf(root: string, raw: string, home: string | undefined): { file: string; path: string } | undefined {
+  let p = raw.trim()
+  if (p === '' || /[*?$`(){}]/.test(p)) return undefined
+  if (home !== undefined && (p === '~' || p.startsWith('~/'))) p = home + p.slice(1)
+  if (p.startsWith('~')) return undefined
+  const top = root.replace(/\/+$/, '')
+  if (!p.startsWith('/')) p = `${top}/${p}`
+  const parts: string[] = []
+  for (const part of p.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      if (parts.length === 0) return undefined
+      parts.pop()
+    } else parts.push(part)
+  }
+  if (parts.length === 0 || parts.some(part => IGNORED.has(part))) return undefined
+  const file = '/' + parts.join('/')
+  if (file === top) return undefined
+  if (file.startsWith(top + '/')) return { file, path: file.slice(top.length + 1) }
+  const homeTop = home?.replace(/\/+$/, '')
+  if (homeTop !== undefined && file.startsWith(homeTop + '/')) return { file, path: `${HOME_ROOT}/${file.slice(homeTop.length + 1)}` }
+  return { file, path: `${DISK_ROOT}${file}` }
 }
 
 // ---------------------------------------------------------------- diffs
