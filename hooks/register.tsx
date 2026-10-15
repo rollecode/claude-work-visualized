@@ -4,8 +4,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Activity, Ghost, Op, TreeEntry, TurnInfo } from '../types'
 import {
   COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
-  buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, legendLines, mix,
-  relPath, scrollTo, staleKeys, statusLine, summaryLines, withPath, withoutPath,
+  buildRows, classifyBash, counted, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isRemote, legendLines, mix,
+  relPath, remotePath, scrollTo, staleKeys, statusLine, summaryLines, withPath, withoutPath,
 } from './model'
 import type { FolderMemory, Seg, Target } from './model'
 
@@ -54,7 +54,8 @@ async function scanTree($: EngineInterface): Promise<TreeEntry[]> {
 function rescan($: EngineInterface, claimed: ReadonlySet<string>): Promise<unknown> {
   scanning = scanning.then(async () => {
     const fresh = await scanTree($)
-    const before = await read($, tree)
+    // Remote paths come from commands, not the scan, so they are kept as they are.
+    const before = (await read($, tree)).filter(t => !isRemote(t.p))
     const now = await $.clock.now()
     const diff = diffTrees(before, fresh)
     // Keep entries a running create put in early, so they don't blink out.
@@ -62,9 +63,9 @@ function rescan($: EngineInterface, claimed: ReadonlySet<string>): Promise<unkno
     const busy = new Set([...claimed, ...Object.keys(running).filter(p => (running[p]?.running ?? 0) > 0)])
     let merged = fresh
     for (const [p, a] of Object.entries(running)) {
-      if (a.running > 0 && a.op === 'create') merged = withPath(merged, p, false)
+      if (a.running > 0 && a.op === 'create' && !isRemote(p)) merged = withPath(merged, p, false)
     }
-    await update($, tree, () => merged)
+    await update($, tree, list => [...merged, ...list.filter(t => isRemote(t.p))])
     if (before.length === 0) return // the first map of the project is no activity
     const born = diff.created.filter(t => !busy.has(t.p))
     const changed = diff.edited.filter(p => !busy.has(p))
@@ -129,6 +130,10 @@ async function targetsOf($: EngineInterface, tool: string, input: Record<string,
     case 'Bash': {
       const command = str('command') ?? ''
       return classifyBash(command).flatMap(t => {
+        if (t.host !== undefined) {
+          const path = remotePath(t.host, t.path)
+          return path === undefined ? [] : [{ op: t.op, path }]
+        }
         // Writing to a file that isn't there yet is a create.
         const path = relPath(cwd, t.path.startsWith('/') ? t.path : `${cwd}/${t.path}`)
         const op: Op = t.op === 'edit' && path !== undefined && !known.has(path) ? 'create' : t.op
@@ -299,7 +304,14 @@ export const register: Register = on => {
         return out
       })
       if (!failed) {
-        await update($, turn, info => targets.reduce((acc, t) => (t.op === 'delete' ? acc : counted(acc, t.op, t.path)), info))
+        await update($, turn, info => targets.reduce((acc, t) => (t.op === 'delete' && !isRemote(t.path) ? acc : counted(acc, t.op, t.path)), info))
+      }
+      // No rescan sees a remote delete, so it turns into a ghost here.
+      const remoteGone = failed ? [] : targets.filter(t => t.op === 'delete' && isRemote(t.path))
+      if (remoteGone.length > 0) {
+        await update($, ghosts, map => ({ ...map, ...Object.fromEntries(remoteGone.map(t => [t.path, { d: false, at: endedAt }])) }))
+        await update($, activity, map => Object.fromEntries(Object.entries(map).filter(([p]) => !remoteGone.some(t => t.path === p))))
+        await update($, tree, list => remoteGone.reduce((acc, t) => withoutPath(acc, t.path), list))
       }
       const left = await read($, activity)
       if (focusOf(left) === undefined) setStatus($, undefined)

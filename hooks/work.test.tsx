@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, relPath, statusLine, summaryLines, T } from './model'
+import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
 import type { FolderMemory } from './model'
 
 const ROOT = '/proj'
@@ -174,4 +174,61 @@ test('a Read shows in the pane as Claude viewing that file', async ($, on) => {
   }
   release()
   await reading
+})
+
+test('commands run over ssh, scp and rsync are read as work on that host', async () => {
+  expect(classifyBash("ssh -p 2222 -i ~/.ssh/key deploy@web1 'sudo sed -i s/a/b/ /etc/nginx/nginx.conf && rm -f /tmp/old.log'")).toEqual([
+    { op: 'edit', path: '/etc/nginx/nginx.conf', host: 'web1' },
+    { op: 'delete', path: '/tmp/old.log', host: 'web1' },
+  ])
+  expect(classifyBash('ssh web1 cat /var/log/app.log | grep error > errors.txt')).toEqual([
+    { op: 'view', path: '/var/log/app.log', host: 'web1' },
+    { op: 'edit', path: 'errors.txt' },
+  ])
+  expect(classifyBash("ssh web1 bash -s <<'EOF'\ntouch /srv/app/ready\nrm /srv/app/lock\nEOF\nls")).toEqual([
+    { op: 'create', path: '/srv/app/ready', host: 'web1' },
+    { op: 'delete', path: '/srv/app/lock', host: 'web1' },
+  ])
+  expect(classifyBash("ssh web1 'cat > /etc/motd' <<EOF\nrm everything\nEOF")).toEqual([{ op: 'edit', path: '/etc/motd', host: 'web1' }])
+  expect(classifyBash('scp dist/app.tar.gz root@web2:/opt/app.tar.gz')).toEqual([
+    { op: 'view', path: 'dist/app.tar.gz' },
+    { op: 'create', path: '/opt/app.tar.gz', host: 'web2' },
+  ])
+  expect(classifyBash('cat > notes.md <<EOF\nrm -rf /\nEOF')).toEqual([{ op: 'edit', path: 'notes.md' }])
+  expect(remotePath('web1', '/etc/./nginx/../hosts')).toBe('web1:/etc/hosts')
+  expect(remotePath('web1', 'logs/app.log')).toBe('web1:/~/logs/app.log')
+  expect(remotePath('web1', '$HOME/x')).toBe(undefined)
+})
+
+test('a file deleted over ssh shows under its host and plays its exit', async ($, on) => {
+  mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', ($, e) =>
+    ({ value: e.path === ROOT ? [{ name: 'package.json', kind: 'file', size: 1, mtimeMs: 1, isLink: false }] : [] }) as never,
+  )
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false } }) as never)
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await $.tool.call({ tool: 'Bash', command: "ssh web1 'sed -i s/a/b/ /etc/app.conf && rm /tmp/old.log'" } as never)
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as never) // a rescan after the ssh call
+  await new Promise(resolve => setTimeout(resolve, 100))
+
+  const ui = await $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  expect(shown).toContain('web1:/')
+  expect(shown).toContain('app.conf')
+  expect(shown).toContain('old.log')
+  expect(shown).toContain('package.json')
+  await ui.unmount()
 })
