@@ -1,6 +1,6 @@
 # Claude Work Visualized
 
-[![Version](https://img.shields.io/badge/version-0.2.0-d97757.svg?style=for-the-badge)](CHANGELOG.md)
+[![Version](https://img.shields.io/github/v/release/rollecode/claude-work-visualized?style=for-the-badge&color=blue&label=version)](https://github.com/rollecode/claude-work-visualized/releases)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-cc785c?style=for-the-badge&logo=anthropic&logoColor=white)](https://claude.com/claude-code)
 [![TypeScript](https://img.shields.io/badge/typescript-%233178C6.svg?style=for-the-badge&logo=typescript&logoColor=white)](hooks/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-3fb950.svg?style=for-the-badge)](LICENSE)
