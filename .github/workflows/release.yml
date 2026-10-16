@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    branches: [rolle]
+    paths:
+      - 'CHANGELOG.md'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Get version from CHANGELOG
+        id: version
+        run: |
+          VERSION=$(grep -m1 '^### ' CHANGELOG.md | sed 's/### \([0-9.]*\).*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Found version: $VERSION"
+
+      - name: Check if release exists
+        if: steps.version.outputs.version != ''
+        id: check
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" > /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Extract release notes
+        if: steps.version.outputs.version != '' && steps.check.outputs.exists == 'false'
+        id: notes
+        run: |
+          # Extract notes for this version (between first and second ### headers)
+          NOTES=$(awk '/^### [0-9]/{if(p) exit; p=1; next} p' CHANGELOG.md)
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        if: steps.version.outputs.version != '' && steps.check.outputs.exists == 'false'
+        # Notes are passed through an env var, not interpolated into the shell command, so
+        # changelog content can never be executed as shell syntax.
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --title "v${{ steps.version.outputs.version }}" \
+            --notes "$RELEASE_NOTES"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ steps.notes.outputs.notes }}
