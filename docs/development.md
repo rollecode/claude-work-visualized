@@ -1,5 +1,30 @@
 # Development
 
+## Project layout
+
+```
+claude-work-visualized/
+├── .claude-plugin/
+│   ├── plugin.json              plugin manifest
+│   └── marketplace.json         lets the repo be added as a marketplace
+├── hooks/
+│   ├── hooks.json               names the hooks module
+│   ├── register.tsx             hooks: tool calls, scanning, /watch, timers, the pane
+│   ├── model.ts                 pure logic: command parsing, scan diffs, the animation engine
+│   ├── code.ts                  pure logic of the code view: line diff and edit replay
+│   ├── vendor/prism.js          Prism syntax highlighter, bundled as one module
+│   ├── work.test.tsx            tests
+│   └── code.test.tsx            tests of the code view
+├── types/index.d.ts             types for the data the plugin keeps in session state
+├── docs/                        documentation
+│   └── media/                   README screenshots and GIFs
+├── scripts/
+│   ├── render-session.mjs       renders the README's top GIF
+│   └── render-media.mjs         renders the pane-only GIF and stills
+├── LICENSE
+└── README.md
+```
+
 ## Commands
 
 Run these from the plugin folder:
@@ -74,5 +99,6 @@ plays a scripted session through `hooks/model.ts`, paints each frame in headless
 packs the frames into a GIF with ffmpeg. Re-run it after changing how the pane looks:
 
 ```sh
-node scripts/render-media.mjs   # Node 23.6+, Playwright with Chromium, ffmpeg
+node scripts/render-media.mjs     # Node 23.6+, Playwright with Chromium, ffmpeg
+node scripts/render-session.mjs   # the README's top GIF: a mock Claude Code chat beside the real pane
 ```

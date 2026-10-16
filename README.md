@@ -1,57 +1,95 @@
 # Claude Work Visualized
 
-A Claude Code mod that turns Claude's file operations into a **live, animated map of your project**.
-A sidebar pane shows the project tree and animates every file as Claude reads, edits, creates or
-deletes it, so you can see at a glance where Claude is working right now.
+[![Version](https://img.shields.io/badge/version-0.2.0-d97757.svg?style=for-the-badge)](CHANGELOG.md)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-cc785c?style=for-the-badge&logo=anthropic&logoColor=white)](https://claude.com/claude-code)
+[![TypeScript](https://img.shields.io/badge/typescript-%233178C6.svg?style=for-the-badge&logo=typescript&logoColor=white)](hooks/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-3fb950.svg?style=for-the-badge)](LICENSE)
+
+A Claude Code plugin that adds a live, animated map of your project next to the chat. Every file Claude reads, edits, creates or deletes lights up in the tree as it happens, and every edit is replayed as keystrokes in a code view beside it.
 
 <p align="center">
-  <img src="docs/media/demo.gif" alt="The work map following Claude through a session: reading two files, editing one, creating a component, editing an index, deleting a file, then the completion card" width="446">
+  <img src="docs/media/session.gif" alt="Claude Code with verbose output off on the left, and the work pane on the right: the tree lights up as Claude reads two files, edits one, creates a component, edits two more and deletes a file, while the code view types each change in" width="100%">
 </p>
+
+This is Rolle's fork of [GrzeskoByte/claude-work-visualized](https://github.com/GrzeskoByte/claude-work-visualized). It adds the code view, syntax highlighting, one-line edit results in the chat, remote work over `ssh`, `scp` and `rsync`, and replays of files changed by shell commands. See the [changelog](CHANGELOG.md).
 
 ## Features
 
-- **Live file tree:** the project is scanned when the session starts and rescanned every 1.5 s, so
-  changes made by scripts, builds or your editor show up too.
-- **One look per operation:** each of read, edit, create and delete has its own colour, glyph and
-  animation, so you can tell them apart without reading labels.
-- **Current file:** the file Claude is on right now gets the strongest animation, a `▌` marker, a
-  tinted row and a `◂ editing` label.
-- **Path to the current file:** the tree guides and parent folders light up along the way down
-  to it, weaker the further up they are.
-- **Fading trail:** files Claude has touched stay marked and fade back to normal over about 60 s.
-- **Prompt line:** shows what Claude is doing, on which path, for how long, with a blinking
-  cursor.
-- **Code view:** each `Edit` and `Write`, and each file a shell command changes (`sed -i`, `>`,
-  `tee`, or a script that rewrites a file it names), is replayed as keystrokes next to the tree: replaced
-  lines turn red and fold away, new lines type in behind a caret, small changes are selected,
-  backspaced and retyped in place, and gutter marks stay for a while after. Long lines wrap, the
-  view scrolls smoothly to the caret, and code is highlighted per language (about 60, through
-  Prism) in Tokyo Night colours.
-- **Remote work:** commands run over `ssh`, and files copied with `scp` or `rsync`, show in the
-  tree under a folder per host (`deploy@web1:/etc/nginx/…`, `~` for the remote home), heredoc
-  scripts and `for` loops included. While Claude works on a host, the header names it:
-  `work-map ~/project → deploy@web1`.
-- **Completion card:** when a turn ends, a card shows how many files were viewed, edited, created
-  and deleted, as filling bars.
-- **Terminal style:** only one-cell glyphs and box-drawing characters, up to 30 fps while anything
-  moves, and idle when nothing does.
+- **Live file tree.** The project is scanned at session start and rescanned every 1.5 seconds, so changes from scripts, builds and your editor show up too.
+- **A look per operation.** Read, edit, create and delete each have their own colour, glyph and animation.
+- **Current file.** The file Claude is on gets the strongest animation, a `▌` marker and a `◂ editing` label, and the path down to it lights up.
+- **Fading trail.** Touched files stay marked and fade back to normal over about a minute.
+- **Code view.** Each `Edit` and `Write`, and each file a shell command changes (`sed -i`, `>`, `tee`, a script that rewrites a file it names), is replayed as keystrokes: replaced lines turn red and fold away, new lines type in behind a caret, and gutter marks stay for a while. Highlighting covers about 60 languages through Prism, in Tokyo Night colours.
+- **Quiet chat.** While the pane is shown, an edit's result in the chat is one line (`± Edited src/app.ts +3 -1`), because the pane already shows the diff.
+- **Remote work.** Files touched over `ssh`, `scp` and `rsync` show under a folder per host (`deploy@web1:/etc/nginx/…`), and the header names the host Claude is working on.
+- **Completion card.** When a turn ends, a card counts the files viewed, edited, created and deleted.
+- **Terminal friendly.** One-cell glyphs and box-drawing characters only, up to 30 fps while something moves, idle otherwise.
+
+## Installation
+
+Requires [Claude Code](https://claude.com/claude-code) with function-hooks plugins, tested on 2.1.288 and later. The function-hooks API is in early access and may change between releases. The pane opens by itself in a terminal at least 144 columns wide, and the colours are tuned for a dark theme.
+
+### From the marketplace
+
+This repository is also a plugin marketplace:
+
+```sh
+claude plugin marketplace add rollecode/claude-work-visualized
+claude plugin install work-visualized@claude-work-visualized
+```
+
+The same works inside Claude Code as `/plugin marketplace add …` and `/plugin install …`. Start a new session and the work map loads.
+
+Update and remove with:
+
+```sh
+claude plugin marketplace update claude-work-visualized
+claude plugin update work-visualized@claude-work-visualized
+claude plugin uninstall work-visualized@claude-work-visualized
+```
+
+### From a local clone
+
+```sh
+git clone https://github.com/rollecode/claude-work-visualized.git
+claude --plugin-dir ./claude-work-visualized
+```
+
+`--plugin-dir` loads the plugin for one session and reloads it on every save. To load it in every session, put the folder's absolute path in `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_PLUGIN_DIRS": "/home/you/claude-work-visualized"
+  }
+}
+```
+
+### Recommended Claude Code settings
+
+The pane works best when the chat stays short. The GIF above runs with these in `~/.claude/settings.json`:
+
+```json
+{
+  "verbose": false,
+  "bashEditDiffEnabled": false
+}
+```
+
+`verbose: false` keeps tool output collapsed to one line (`Ctrl+O` still opens the full transcript), and `bashEditDiffEnabled: false` stops Claude Code from printing a diff after each shell command that changes files. Claude Code turns that diff on by default in auto mode.
 
 ## Usage
 
 | Command | What it does |
 | --- | --- |
-| `/watch` | Turns the work map on or off (opens or closes the pane). The choice is remembered across sessions. |
-| `/diffs` | Switches edit results in the chat between one line and the full diff. The choice is remembered across sessions. |
+| `/watch` | Opens or closes the pane. The choice is remembered across sessions. |
+| `/diffs` | Switches edit results in the chat between one line and the full diff. Also remembered. |
 
-- When it's on, the pane opens by itself at session start once the terminal is at least 144
-  columns wide. `/watch` opens it at any width.
-- Closing the pane by hand also turns watching off. The next `/watch` reopens it.
-- While a tool runs, the status line also shows the current operation, e.g. `± edit src/app.ts`.
-- While the pane is shown, an edit's result in the chat is one line (`± Edited src/app.ts +3 -1`),
-  since the pane replays the diff. With the pane closed, or after `/diffs`, the full diff shows.
-- Scroll over the code view (mouse wheel, touchpad, or the arrow and page keys while the pane is
-  focused) to move through the whole edited file; changed lines keep their gutter mark. Claude's
-  next edit brings the view back to following it.
+- Closing the pane by hand also turns watching off, and the next `/watch` reopens it.
+- While a tool runs, the status line shows the current operation, for example `± edit src/app.ts`.
+- Scroll over the code view (mouse wheel, touchpad, or the arrow and page keys with the pane focused) to move through the whole edited file. Claude's next edit brings the view back to following it.
+
+If nothing appears, start Claude Code with `claude --debug`. The debug log names the plugin and the reason whenever a hook fails or the module does not load.
 
 ## Visual language
 
@@ -60,7 +98,7 @@ deletes it, so you can see at a glance where Claude is working right now.
 | `◉` | read | blue | a band of light sweeps across the name | `✓`, colour fades |
 | `±` | edit | orange | a ripple runs along the name, then a blinking cursor `▏` | `✓`, colour fades |
 | `+` | create | green | the name types itself in, then glows | settles into the tree |
-| `✗` | delete | red | red pulse | highlight → damped shake → removed letter by letter |
+| `✗` | delete | red | red pulse | highlight, damped shake, removed letter by letter |
 
 <table>
   <tr>
@@ -76,134 +114,26 @@ deletes it, so you can see at a glance where Claude is working right now.
   </tr>
 </table>
 
-<sub>The GIF and screenshots are rendered from the plugin's own drawing code (`hooks/model.ts`) by
-[`scripts/render-media.mjs`](scripts/render-media.mjs), so they show exactly what the pane draws,
-frame by frame.</sub>
+<sub>All media is rendered from the plugin's own drawing code, so the pane in it is exactly what the plugin draws. [`scripts/render-session.mjs`](scripts/render-session.mjs) makes the GIF at the top, with the chat column as a mockup of Claude Code, and [`scripts/render-media.mjs`](scripts/render-media.mjs) makes the stills.</sub>
 
-See [docs/visual-language.md](docs/visual-language.md) for the full timelines and colours.
+The full timelines and colours are in [docs/visual-language.md](docs/visual-language.md).
 
-## Installation
+## Limitations
 
-### Requirements
-
-- [Claude Code](https://claude.com/claude-code) with function-hooks plugins, tested on **2.1.288**. The
-  function-hooks API is in early access and may change between releases.
-- A terminal at least **144 columns wide** for the pane to open on its own as a sidebar. It opens
-  at any width with `/watch`.
-- A dark terminal theme is recommended; the colours are tuned for one.
-
-### Option 1: install from the marketplace (recommended)
-
-This repository is also a Claude Code plugin marketplace. Inside Claude Code, run:
-
-```
-/plugin marketplace add GrzeskoByte/claude-work-visualized
-/plugin install work-visualized@claude-work-visualized
-```
-
-Or from your shell:
-
-```sh
-claude plugin marketplace add GrzeskoByte/claude-work-visualized
-claude plugin install work-visualized@claude-work-visualized
-```
-
-Restart Claude Code (or start a new session) and the work map loads. Run `/watch` if the pane
-doesn't open by itself.
-
-To update to the latest version:
-
-```sh
-claude plugin marketplace update claude-work-visualized
-claude plugin update work-visualized@claude-work-visualized
-```
-
-To remove it:
-
-```sh
-claude plugin uninstall work-visualized@claude-work-visualized
-claude plugin marketplace remove claude-work-visualized
-```
-
-### Option 2: run from a local clone
-
-Useful for trying it once or for working on the mod itself:
-
-```sh
-git clone https://github.com/GrzeskoByte/claude-work-visualized.git
-claude --plugin-dir ./claude-work-visualized
-```
-
-`--plugin-dir` loads the plugin for that session only, and reloads it whenever you save a file. To
-load it in every session without installing it, add the folder's absolute path to
-`CLAUDE_CODE_PLUGIN_DIRS`, either in your environment or in the `env` block of
-`~/.claude/settings.json`:
-
-```json
-{
-  "env": {
-    "CLAUDE_CODE_PLUGIN_DIRS": "/home/you/claude-work-visualized"
-  }
-}
-```
-
-### Check that it works
-
-1. Start Claude Code in any project and run `/watch`. The pane should show
-   `✶ work-map ~/<your project>` and the project tree.
-2. Ask Claude to read or edit a file. That file should light up as Claude works on it.
-
-If nothing appears, start Claude Code with `claude --debug`. The debug log names the plugin and the
-reason whenever a hook fails or the module doesn't load.
-
-## Project layout
-
-```
-claude-work-visualized/
-├── .claude-plugin/
-│   ├── plugin.json              plugin manifest
-│   └── marketplace.json         lets the repo be added as a marketplace
-├── hooks/
-│   ├── hooks.json               names the hooks module
-│   ├── register.tsx             hooks: tool calls, scanning, /watch, timers, the pane
-│   ├── model.ts                 pure logic: command parsing, scan diffs, the animation engine
-│   ├── code.ts                  pure logic of the code view: line diff and edit replay
-│   ├── vendor/prism.js          Prism syntax highlighter, bundled as one module
-│   ├── work.test.tsx            tests
-│   └── code.test.tsx            tests of the code view
-├── types/index.d.ts             types for the data the mod keeps in session state
-├── docs/                        documentation
-│   └── media/                   README screenshots and GIF
-├── scripts/render-media.mjs     renders docs/media from the drawing code
-├── LICENSE
-└── README.md
-```
+- **Shell commands.** Files touched by `rm`, `mv`, `cp`, `touch`, `mkdir`, `cat`, `sed -i`, `>` and similar are recognised from the command text. Anything else is caught by the rescan after the command and shown as finished, without a running phase.
+- **Other folders.** Files outside the session folder show under `~:/` (your home folder) or `local:/`. Shell commands are followed through `cd` and `NAME=value`.
+- **Remote work.** Only what the command text names is shown. Remote folders are not scanned, so a change a remote script makes on its own is not seen.
+- **Changes made outside Claude** animate too, but the completion card counts only what Claude's own tool calls changed.
+- **Skipped folders.** `node_modules`, `.git`, `dist`, `build`, caches and virtual environments are left out of the tree.
+- **Code view.** A shell command's change is replayed only for files the command names, up to 4 per command. Files over 256 KB are skipped, and one replay shows at most 80 lines.
+- **Size.** A scan covers at most 2,000 entries, 12 levels deep.
 
 ## Documentation
 
 - [Architecture](docs/architecture.md): how tool calls become animations
 - [Visual language](docs/visual-language.md): glyphs, colours and every timeline
-- [Development](docs/development.md): testing, type-checking and changing the mod
-
-## Limitations
-
-- **Shell commands:** files touched by `rm`, `mv`, `cp`, `touch`, `mkdir`, `cat`, `sed -i`, `>`
-  and similar are recognised by reading the command text. Anything else is caught by the rescan
-  after the command and shown as finished, without a "running" phase.
-- **Other folders:** files outside the session folder show under `~:/` (your home folder) or
-  `local:/`. Shell commands are followed through `cd` and `NAME=value`.
-- **Remote work:** only what the command text names is shown; remote folders are not scanned, so
-  a change a remote script makes on its own is not seen.
-- **Changes made outside Claude:** they show up too, animated as if Claude had made them, but the
-  completion card counts only what Claude's own tool calls changed.
-- **Skipped folders:** `node_modules`, `.git`, `dist`, `build`, caches and virtual environments
-  are left out of the tree.
-- **Code view:** a shell command's change is replayed only for files the command names, up to 4
-  per command; a script that changes files it doesn't name shows in the tree only. Files over 256 KB are skipped, and one replay shows at
-  most 80 lines.
-- **Size limit:** a scan covers at most 2,000 entries, 12 levels deep.
-- **Colours:** tuned for dark terminal themes.
+- [Development](docs/development.md): project layout, testing, type-checking and changing the plugin
 
 ## License
 
-[MIT](LICENSE) © 2026 Grzegorz Sierocki
+[MIT](LICENSE). Original plugin © 2026 Grzegorz Sierocki, fork changes by Rolle Laukkarinen.

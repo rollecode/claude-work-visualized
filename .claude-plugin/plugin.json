@@ -4,6 +4,6 @@
   "description": "Claude Work Visualized: a live, animated map of the project showing where Claude reads, edits, creates and deletes files",
   "author": { "name": "Grzegorz Sierocki" },
   "license": "MIT",
-  "repository": "https://github.com/GrzeskoByte/claude-work-visualized",
+  "repository": "https://github.com/rollecode/claude-work-visualized",
   "types": "./types/index.d.ts"
 }
