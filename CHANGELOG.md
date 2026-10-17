@@ -1,3 +1,7 @@
+### 0.2.1: 2026-10-17
+
+* Make pane background transparent
+
 ### 0.2.0: 2026-10-15
 
 * Add animated code view for edits
