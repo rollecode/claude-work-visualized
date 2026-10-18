@@ -19,6 +19,9 @@ This is Rolle's fork of [GrzeskoByte/claude-work-visualized](https://github.com/
 - **A look per operation.** Read, edit, create and delete each have their own colour, glyph and animation.
 - **Current file.** The file Claude is on gets the strongest animation, a `▌` marker and a `◂ editing` label, and the path down to it lights up.
 - **Fading trail.** Touched files stay marked and fade back to normal over about a minute.
+- **Prompt line.** Shows what Claude is doing, on which path and for how long. A call that touches no file (`df -h`, a test run, a web search, an MCP tool) shows as `running …` while it runs.
+- **Progress.** A running copy or download (`cp`, `rsync`, `scp`, `dd`, `curl -o`, `wget -O`, a `>` redirect) shows how far it has got: a percentage and a filling bar when the source size is known, otherwise the bytes landed so far.
+- **Searches and globs.** Files a command's output lists (`grep -rl`, `find`, `ls`) flash as read, and a glob (`wc -l src/*.ts`, `sed -i … *.md`) lights each file it matches.
 - **Code view.** Each `Edit` and `Write`, and each file a shell command changes (`sed -i`, `>`, `tee`, a script that rewrites a file it names), is replayed as keystrokes: replaced lines turn red and fold away, new lines type in behind a caret, and gutter marks stay for a while. Highlighting covers about 60 languages through Prism, in Tokyo Night colours.
 - **Quiet chat.** While the pane is shown, an edit's result in the chat is one line (`± Edited src/app.ts +3 -1`), because the pane already shows the diff.
 - **Remote work.** Files touched over `ssh`, `scp` and `rsync` show under a folder per host (`deploy@web1:/etc/nginx/…`), and the header names the host Claude is working on.
@@ -120,8 +123,8 @@ The full timelines and colours are in [docs/visual-language.md](docs/visual-lang
 
 ## Limitations
 
-- **Shell commands.** Files touched by `rm`, `mv`, `cp`, `touch`, `mkdir`, `cat`, `sed -i`, `>` and similar are recognised from the command text. Anything else is caught by the rescan after the command and shown as finished, without a running phase.
-- **Other folders.** Files outside the session folder show under `~:/` (your home folder) or `local:/`. Shell commands are followed through `cd` and `NAME=value`.
+- **Shell commands.** Files touched by `rm`, `mv`, `cp`, `touch`, `mkdir`, `sed -i`, `>` and similar are recognised from the command text, and any other command reads the existing files it names. A change no command names is caught by the rescan after it and shown as finished, without a running phase.
+- **Other folders.** Files outside the session folder show under `~:/` (your home folder), `scratchpad:/` (Claude Code's scratch folder for the session) or `local:/`. Shell commands are followed through `cd` and `NAME=value`.
 - **Remote work.** Only what the command text names is shown. Remote folders are not scanned, so a change a remote script makes on its own is not seen.
 - **Changes made outside Claude** animate too, but the completion card counts only what Claude's own tool calls changed.
 - **Skipped folders.** `node_modules`, `.git`, `dist`, `build`, caches and virtual environments are left out of the tree.

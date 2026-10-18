@@ -1,3 +1,9 @@
+### 0.3.0: 2026-10-18
+
+* Show every shell command and tool call
+* Add progress for copies and downloads
+* Add scratchpad folder to the tree
+
 ### 0.2.1: 2026-10-17
 
 * Make pane background transparent
