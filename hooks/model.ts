@@ -123,9 +123,20 @@ export type Target = { op: Op; path: string; host?: string }
 const VIEWERS = new Set([
   'cat', 'head', 'tail', 'less', 'more', 'bat', 'wc', 'grep', 'rg', 'ag', 'diff', 'file', 'stat',
   'nl', 'jq', 'awk', 'sed', 'cut', 'sort', 'uniq', 'xxd', 'hexdump', 'od', 'strings', 'md5sum',
-  'sha256sum', 'ls', 'tree', 'find',
+  'sha256sum', 'ls', 'tree', 'find', 'tac', 'cmp', 'comm', 'paste', 'join', 'column', 'fold', 'fmt',
+  'rev', 'base64', 'sha1sum', 'sha512sum', 'b2sum', 'cksum', 'du', 'df', 'zcat', 'bzcat', 'xzcat',
+  'yq', 'egrep', 'fgrep', 'zgrep', 'ugrep', 'ug', 'gawk', 'fd', 'eza', 'exa', 'lsd', 'readlink',
+  'realpath', 'source', '.', 'identify', 'exiftool', 'pdftotext', 'pdfinfo',
 ])
+// Their first word past the flags is a pattern or program, unless `-e` or `-f` gives it.
+const PATTERN_FIRST = new Set(['grep', 'egrep', 'fgrep', 'zgrep', 'ugrep', 'ug', 'rg', 'ag', 'sed', 'awk', 'gawk', 'jq', 'yq', 'fd'])
+// Their first word past the flags is a subcommand or target, not a file.
+const SUBCOMMAND_FIRST = new Set(['git', 'npm', 'pnpm', 'yarn', 'bun', 'deno', 'cargo', 'go', 'docker', 'kubectl', 'systemctl', 'brew', 'apt', 'pip', 'pip3', 'gh', 'make'])
+// Words of these name no file they read.
+const NOT_READERS = new Set(['echo', 'printf', 'which', 'type', 'kill', 'pkill', 'sleep', 'test', '[', 'true', 'false', 'set', 'unset', 'alias', 'read', 'exit', 'return', 'wait'])
 const DELETERS = new Set(['rm', 'unlink', 'rmdir', 'trash', 'shred'])
+const COPIERS = new Set(['cp', 'ln', 'install'])
+const WRAPPERS = ['sudo', 'command', 'exec', 'time', 'export', 'env', 'nohup']
 
 /** Shell words: quoted parts join the text around them (`K="-i x"` is one word), quotes removed. */
 function tokenize(segment: string): string[] {
@@ -143,7 +154,7 @@ function tokenize(segment: string): string[] {
  * misses, so it only has to be right about what to animate while it runs.
  */
 export function classifyBash(command: string): Target[] {
-  return readCommand(command).targets
+  return readCommand(command, 'local').targets
 }
 
 /**
@@ -152,13 +163,16 @@ export function classifyBash(command: string): Target[] {
  * `'CHANGELOG.md'`), which the code view checks before and after it runs.
  */
 export function mentionsOf(command: string): string[] {
-  return [...new Set(readCommand(command).mentions)]
+  return [...new Set(readCommand(command, 'local').mentions)]
 }
+
+/** Where a command runs: on another host, words that name no file can't be told apart by a stat. */
+type Where = 'local' | 'remote'
 
 const looksLikeFile = (w: string) =>
   /^[\w.~\/@+-]+$/.test(w) && /[^./]\.[A-Za-z][A-Za-z0-9]*$|\//.test(w) && !w.startsWith('-') && !/^[\d.]+$/.test(w) && w !== '.' && w !== '..'
 
-function readCommand(command: string): { targets: Target[]; mentions: string[] } {
+function readCommand(command: string, where: Where): { targets: Target[]; mentions: string[] } {
   const targets: Target[] = []
   const mentions: string[] = []
   // What `cd` and `NAME=value` set earlier in the command, for the paths after them.
@@ -195,10 +209,11 @@ function readCommand(command: string): { targets: Target[]; mentions: string[] }
       rest.push(w)
     }
     words = rest
-    while (words[0] !== undefined && (/^\w+=/.test(words[0]) || ['sudo', 'command', 'exec', 'time', 'export'].includes(words[0]))) {
+    while (words[0] !== undefined && (/^\w+=/.test(words[0]) || WRAPPERS.includes(words[0]) || words[0] === 'timeout')) {
       const set = /^(\w+)=(.*)$/.exec(words[0])
       if (set) vars.set(set[1] ?? '', set[2] ?? '')
-      words = words.slice(1)
+      // `timeout 30 cmd`: the duration goes with it.
+      words = words.slice(words[0] === 'timeout' ? 2 : 1)
     }
     let cmd = words[0]
     if (cmd === undefined) {
@@ -220,11 +235,15 @@ function readCommand(command: string): { targets: Target[]; mentions: string[] }
       targets.push(...sshTargets(args, heredoc))
       continue
     }
-    if (SHELLS.has(cmd) && heredoc !== undefined) {
-      targets.push(...classifyBash(heredoc).map(t => (t.host === undefined ? { ...t, path: within(t.path) } : t)))
+    const script = SHELLS.has(cmd) ? (heredoc ?? (args.includes('-c') ? args[args.indexOf('-c') + 1] : undefined)) : undefined
+    if (script !== undefined) {
+      targets.push(...readCommand(script, where).targets.map(t => (t.host === undefined ? { ...t, path: within(t.path) } : t)))
       continue
     }
-    const operands = args.filter(a => !a.startsWith('-') && !/[*?$`(){}]/.test(a))
+    // Globs stay in: the tool call expands them against the disk.
+    const isPath = (a: string) => !/[$`(){}]/.test(a)
+    const plain = args.filter(a => !a.startsWith('-'))
+    const operands = plain.filter(isPath)
     if (cmd === 'scp' || cmd === 'rsync') {
       targets.push(...copyTargets(operands))
     } else if (DELETERS.has(cmd)) {
@@ -235,18 +254,29 @@ function readCommand(command: string): { targets: Target[]; mentions: string[] }
       const dest = operands[operands.length - 1] ?? ''
       for (const p of operands.slice(0, -1)) targets.push({ op: 'delete', path: p })
       targets.push({ op: 'create', path: dest })
-    } else if (cmd === 'cp' && operands.length >= 2) {
+    } else if (COPIERS.has(cmd) && operands.length >= 2) {
       const dest = operands[operands.length - 1] ?? ''
       for (const p of operands.slice(0, -1)) targets.push({ op: 'view', path: p })
       targets.push({ op: 'create', path: dest })
     } else if (cmd === 'tee') {
       for (const p of operands) targets.push({ op: 'edit', path: p })
+    } else if (cmd === 'dd') {
+      for (const m of args.map(a => /^(if|of)=(.+)$/.exec(a))) if (m) targets.push({ op: m[1] === 'if' ? 'view' : 'edit', path: m[2] ?? '' })
+    } else if (cmd === 'curl' || cmd === 'wget') {
+      const flags = cmd === 'curl' ? ['-o', '--output'] : ['-O', '--output-document']
+      const out = args.find((a, i) => i > 0 && flags.includes(args[i - 1] ?? '')) ?? args.map(a => /^--output(?:-document)?=(.+)$/.exec(a)?.[1]).find(Boolean)
+      if (out !== undefined && out !== '-') targets.push({ op: 'edit', path: out })
     } else if ((cmd === 'sed' || cmd === 'perl') && args.some(a => /^-[a-zA-Z]*i/.test(a))) {
       for (const p of inPlaceFiles(args)) targets.push({ op: 'edit', path: p })
-    } else if (VIEWERS.has(cmd)) {
-      // grep/sed/awk/jq take a pattern or program first.
-      const skip = ['grep', 'rg', 'ag', 'sed', 'awk', 'jq'].includes(cmd) ? 1 : 0
-      for (const p of operands.slice(skip)) targets.push({ op: 'view', path: p })
+    } else if (cmd === 'find') {
+      // The paths come before the first test or action.
+      const end = args.findIndex(a => /^[-(!]/.test(a))
+      for (const p of (end < 0 ? args : args.slice(0, end)).filter(isPath)) targets.push({ op: 'view', path: p })
+    } else if (VIEWERS.has(cmd) || (where === 'local' && !NOT_READERS.has(cmd))) {
+      // Anything else reads the files it names; off this machine only the known readers count.
+      const hasProgram = args.some(a => /^(-[ef]|--(regexp|file|expression))(=|$)/.test(a))
+      const skip = (PATTERN_FIRST.has(cmd) && !hasProgram) || SUBCOMMAND_FIRST.has(cmd) ? 1 : 0
+      for (const p of plain.slice(skip).filter(isPath)) targets.push({ op: 'view', path: p })
     }
     relocate(targets, start, within)
   }
@@ -282,7 +312,7 @@ function inPlaceFiles(args: readonly string[]): string[] {
       files.push(a)
     }
   }
-  return (hasScript ? files : files.slice(1)).filter(a => a !== '' && !/[*?$`(){}]/.test(a))
+  return (hasScript ? files : files.slice(1)).filter(a => a !== '' && !/[$`(){}]/.test(a))
 }
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
@@ -401,7 +431,7 @@ function sshTargets(args: readonly string[], heredoc: string | undefined): Targe
   // `ssh host bash -s <<EOF` runs the heredoc's lines on the host.
   const runsShell = tokenize(remote).filter(w => !w.startsWith('-') && w !== 'sudo').every(w => SHELLS.has(baseName(w)))
   const script = heredoc !== undefined && runsShell ? heredoc : remote
-  return classifyBash(script).map(t => ({ ...t, host: t.host ?? host }))
+  return readCommand(script, 'remote').targets.map(t => ({ ...t, host: t.host ?? host }))
 }
 
 /** `scp` and `rsync`: sources are read, the last operand written; `host:path` is remote. */
@@ -446,6 +476,9 @@ export function isUnscanned(path: string): boolean {
 /** Top folders for files outside the session folder: under the home folder, and anywhere else. */
 export const HOME_ROOT = '~:'
 export const DISK_ROOT = 'local:'
+/** Claude Code's per-session scratch folder, `$TMPDIR/claude-<uid>/<project>/<session>/scratchpad`. */
+export const SCRATCH_ROOT = 'scratchpad:'
+const SCRATCH = /\/claude-\d+\/[^/]+\/[\w-]+\/scratchpad\/(.+)$/
 
 /**
  * Where a path a tool names sits: the file on disk and its tree path. Inside
@@ -472,6 +505,8 @@ export function placeOf(root: string, raw: string, home: string | undefined): { 
   const file = '/' + parts.join('/')
   if (file === top) return undefined
   if (file.startsWith(top + '/')) return { file, path: file.slice(top.length + 1) }
+  const scratch = SCRATCH.exec(file)?.[1]
+  if (scratch !== undefined) return { file, path: `${SCRATCH_ROOT}/${scratch}` }
   const homeTop = home?.replace(/\/+$/, '')
   if (homeTop !== undefined && file.startsWith(homeTop + '/')) return { file, path: `${HOME_ROOT}/${file.slice(homeTop.length + 1)}` }
   return { file, path: `${DISK_ROOT}${file}` }
@@ -550,13 +585,44 @@ export function focusOf(activity: Readonly<Record<string, Activity>>): string | 
   return best
 }
 
+/** How far a running copy or write has got: a share of a known total, else the bytes so far. */
+export function progressOf(a: Activity): { text: string; share?: number } | undefined {
+  if (a.bytes === undefined || a.running === 0) return undefined
+  if (a.total !== undefined && a.total > 0) {
+    const share = Math.min(1, a.bytes / a.total)
+    return { text: `${Math.floor(share * 100)}%`, share }
+  }
+  return { text: sizeText(a.bytes) }
+}
+
+const SIZE_UNITS = ['B', 'kB', 'MB', 'GB', 'TB']
+
+function sizeText(bytes: number): string {
+  let n = bytes
+  let unit = 0
+  while (n >= 1000 && unit < SIZE_UNITS.length - 1) {
+    n /= 1000
+    unit++
+  }
+  return `${unit > 0 && n < 10 ? n.toFixed(1) : Math.round(n)} ${SIZE_UNITS[unit]}`
+}
+
+/** A tool call that touches no file, as the prompt line names it: the command, or the tool and its subject. */
+export function doingOf(tool: string, input: Readonly<Record<string, unknown>>): string {
+  const subject = ['command', 'description', 'query', 'url', 'skill', 'pattern'].map(k => input[k]).find((v): v is string => typeof v === 'string')
+  const first = subject?.trim().split('\n')[0]
+  if (tool === 'Bash' && first !== undefined) return first
+  const name = tool.replace(/^mcp__/, '').replace(/__/g, ' ')
+  return first === undefined ? name : `${name} ${first}`
+}
+
 export function isAnimating(
   activity: Readonly<Record<string, Activity>>,
   ghosts: Readonly<Record<string, Ghost>>,
   turn: TurnInfo,
   now: number,
 ): boolean {
-  if (Object.keys(ghosts).length > 0) return true
+  if (Object.keys(ghosts).length > 0 || turn.doing !== undefined) return true
   if (turn.phase === 'complete' && now - turn.at < T.summary + 1000) return true
   return Object.values(activity).some(a => levelOf(a, now) !== 'none')
 }
@@ -844,10 +910,14 @@ export function buildRows(scene: Scene): Row[] {
         segs.push({ t: shown, c: mix(col, '#ffffff', k * 0.8), bg: red, b: true })
       }
       // A leader flows from the right edge into the file, ending in what Claude is doing.
-      const label = ` ${VERB[a.op]} `
+      // A copy with a known size fills the leader from the file outward.
+      const progress = progressOf(a)
+      const label = ` ${VERB[a.op]}${progress === undefined ? '' : ` ${progress.text}`} `
       const pad = Math.max(1, columns - cells(segs) - label.length - 1)
+      const filled = Math.round((progress?.share ?? 0) * Math.max(0, pad - 1))
       segs.push({ t: ' ', bg })
-      segs.push(...paint('╌'.repeat(Math.max(0, pad - 1)), j => ({ c: mix(FAINT, col, 0.15 + 0.6 * pulse(now, 1000, -j * 70)), bg })))
+      segs.push(...paint('━'.repeat(filled), () => ({ c: col, bg, b: true })))
+      segs.push(...paint('╌'.repeat(Math.max(0, pad - 1 - filled)), j => ({ c: mix(FAINT, col, 0.15 + 0.6 * pulse(now, 1000, -(j + filled) * 70)), bg })))
       segs.push({ t: '◂', c: col, bg, b: true })
       segs.push(...paint(label, i => ({ c: mix(col, hot, band(i, ((now / 90) % (label.length + 8)) - 4, 2.2)), bg, b: true })))
       return { key: n.p, path: n.p, segs }
@@ -907,7 +977,7 @@ export function remoteOf(activity: Readonly<Record<string, Activity>>, now: numb
   let at = -Infinity
   for (const [path, a] of Object.entries(activity)) {
     const host = /^([\w.@-]+):\//.exec(path)?.[1]
-    if (host === undefined || `${host}:` === DISK_ROOT || levelOf(a, now) === 'none' || levelOf(a, now) === 'trail') continue
+    if (host === undefined || `${host}:` === DISK_ROOT || `${host}:` === SCRATCH_ROOT || levelOf(a, now) === 'none' || levelOf(a, now) === 'trail') continue
     if (a.startedAt >= at) {
       best = host
       at = a.startedAt
@@ -928,7 +998,8 @@ export function statusLine(activity: Readonly<Record<string, Activity>>, turn: T
     const others = Object.values(activity).filter(x => x.running > 0).length - 1
     const secs = `${(Math.max(0, now - a.startedAt) / 1000).toFixed(1)}s`
     const dir = parentOf(focus)
-    const tail = ` ${secs}${others > 0 ? ` +${others}` : ''}`
+    const progress = progressOf(a)
+    const tail = ` ${secs}${progress === undefined ? '' : ` ${progress.text}`}${others > 0 ? ` +${others}` : ''}`
     const room = columns - 2 - VERB[a.op].length - 1 - tail.length - 2 // '❯ ', the verb, a space, the tail, ' █'
     const path = truncate(focus, room)
     const cut = dir !== '' && path === focus ? dir.length + 1 : 0
@@ -941,6 +1012,19 @@ export function statusLine(activity: Readonly<Record<string, Activity>>, turn: T
       { t: tail, c: MUTED },
       { t: ' ' },
       cursor(col),
+    ]
+  }
+  if (turn.doing !== undefined) {
+    const tail = ` ${(Math.max(0, now - turn.doing.at) / 1000).toFixed(1)}s`
+    const room = columns - 2 - 'running'.length - 1 - tail.length - 2
+    return [
+      { t: '❯ ', c: CLAUDE, b: true },
+      ...shimmer('running', CLAUDE),
+      { t: ' ' },
+      { t: truncate(turn.doing.text, room), c: BASE },
+      { t: tail, c: MUTED },
+      { t: ' ' },
+      cursor(CLAUDE),
     ]
   }
   if (turn.phase === 'working') return [{ t: '❯ ', c: CLAUDE, b: true }, ...shimmer('thinking', MUTED), { t: ' ' }, cursor(MUTED)]

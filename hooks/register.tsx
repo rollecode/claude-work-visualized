@@ -5,7 +5,7 @@ import type { Activity, Clip, Ghost, Op, TreeEntry, TurnInfo } from '../types'
 import { MAX_BYTES, clipOf, codeLines, codeRule, currentClip, enqueue, isClipDone } from './code'
 import {
   COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
-  buildRows, classifyBash, counted, mentionsOf, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
+  baseName, buildRows, classifyBash, counted, doingOf, mentionsOf, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
   placeOf, remotePath, scrollTo, staleKeys, statusLine, summaryLines, withPath, withoutPath,
 } from './model'
 import type { FolderMemory, Seg, Target } from './model'
@@ -19,6 +19,9 @@ const POLL_MS = 1500 // how often the project is rescanned for changes made outs
 const SPLIT_COLUMNS = 96 // from this wide the code view sits beside the tree, else under it
 const EDITORS = new Set(['Edit', 'MultiEdit', 'Write'])
 const MAX_REPLAYS = 4 // files of one tool call the code view checks and replays
+const MAX_MATCHES = 40 // files one glob or one tool's output lights up
+const PROGRESS_MS = 400 // how often a running copy's destination is measured
+const OUTPUT_LISTERS = new Set(['Bash', 'Grep', 'Glob', 'LS']) // tools whose output lines start with file paths
 const PANE_BG = '#000000'
 
 const tree = atom({ plugin: 'work-visualized', key: 'tree' } as const, [] as TreeEntry[])
@@ -115,6 +118,7 @@ async function targetsOf($: EngineInterface, tool: string, input: Record<string,
   const known = new Set((await read($, tree)).map(t => t.p))
   const isThere = async (place: { file: string; path: string }) => known.has(place.path) || (await $.fs.stat(place.file).then(() => true, () => false))
   const resolve = async (raw: string | undefined, op: Op): Promise<Located[]> => {
+    if (raw !== undefined && /[*?[]/.test(raw)) return (await Promise.all((await globbed($, cwd, raw)).map(p => resolve(p, op)))).flat()
     const place = raw === undefined ? undefined : placeOf(cwd, raw, home)
     if (place === undefined) return []
     if (tool !== 'Bash' && tool !== 'Write') return [{ op, ...place }]
@@ -146,6 +150,66 @@ async function targetsOf($: EngineInterface, tool: string, input: Record<string,
     default:
       return []
   }
+}
+
+/** What a glob in a path's last part matches, as the shell would: dotfiles only for a pattern that starts with a dot. */
+async function globbed($: EngineInterface, cwd: string, raw: string): Promise<string[]> {
+  const dir = raw.slice(0, raw.lastIndexOf('/') + 1)
+  const pattern = raw.slice(dir.length)
+  if (/[*?[]/.test(dir)) return []
+  const at = dir === '' || dir === './' ? cwd : placeOf(cwd, dir, home)?.file
+  if (at === undefined) return []
+  const re = new RegExp(`^${pattern.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`)
+  const entries = await $.fs.list(at).catch(() => [])
+  return entries
+    .filter(x => re.test(x.name) && (!x.name.startsWith('.') || pattern.startsWith('.')))
+    .slice(0, MAX_MATCHES)
+    .map(x => dir + x.name)
+}
+
+/** Files a tool's output names, one per line as grep, find or Glob print them, that the tree already holds. */
+function matchesIn(text: string, cwd: string, known: ReadonlySet<string>): string[] {
+  const out = new Set<string>()
+  for (const line of text.split('\n')) {
+    const word = /^\s*([^\s:]+)/.exec(line)?.[1]
+    const path = word === undefined ? undefined : placeOf(cwd, word, home)?.path
+    if (path !== undefined && known.has(path)) out.add(path)
+    if (out.size >= MAX_MATCHES) break
+  }
+  return [...out]
+}
+
+/** Bytes of a copy or write landed so far, also into a folder or rsync's `.name.XXXXXX` temp file. */
+async function landed($: EngineInterface, file: string, sources: readonly Located[]): Promise<number | undefined> {
+  const stat = await $.fs.stat(file).catch(() => undefined)
+  if (stat?.kind === 'file') return stat.size
+  const source = sources[0]?.file
+  if (stat?.kind === 'dir') return sources.length === 1 && source !== undefined ? landed($, `${file}/${baseName(source)}`, []) : undefined
+  const temp = (await $.fs.list(file.slice(0, file.lastIndexOf('/')) || '/').catch(() => [])).find(x => x.name.startsWith(`.${baseName(file)}.`))
+  return temp?.size
+}
+
+/** While a shell command writes one local file, keeps its activity's byte count, and the sources' total, current. */
+function watchProgress($: EngineInterface, targets: readonly Located[]): () => void {
+  const written = targets.filter(t => (t.op === 'create' || t.op === 'edit') && t.file !== undefined)
+  const dest = written[0]
+  if (written.length !== 1 || dest?.file === undefined) return () => undefined
+  const file = dest.file
+  const sources = targets.filter(t => t.op === 'view' && t.file !== undefined)
+  let total: number | undefined
+  void Promise.all(sources.map(s => $.fs.stat(s.file ?? '').then(x => (x.kind === 'file' ? x.size : 0), () => 0))).then(sizes => {
+    total = sizes.reduce((sum, n) => sum + n, 0) || undefined
+  })
+  const timer = $.clock.every(PROGRESS_MS, () => {
+    void landed($, file, sources).then(bytes =>
+      update($, activity, map => {
+        const a = map[dest.path]
+        if (bytes === undefined || a === undefined || a.running === 0 || (a.bytes === bytes && a.total === total)) return map
+        return { ...map, [dest.path]: { ...a, bytes, total } }
+      }),
+    )
+  })
+  return () => timer.cancel()
 }
 
 /** The file's text before an edit: empty for a new file, undefined when it can't be replayed. */
@@ -221,7 +285,9 @@ export const register: Register = on => {
         }
         const c = await read($, clips)
         if (c.some(x => isClipDone(x, t))) await update($, clips, list => list.filter(x => !isClipDone(x, t)))
-        if (!isAnimating(a, g, await read($, turn), t) && t > animateUntil - T.trail) animateUntil = Math.min(animateUntil, t + 1500)
+        // A long run keeps drawing; once nothing moves the clock winds down.
+        if (isAnimating(a, g, await read($, turn), t)) startAnimating(t)
+        else if (t > animateUntil - T.trail) animateUntil = Math.min(animateUntil, t + 1500)
       })()
     })
 
@@ -278,7 +344,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
       const now = await $.clock.now()
-      await update($, turn, info => ({ ...info, phase: 'complete' as const, at: now }))
+      await update($, turn, info => ({ ...info, phase: 'complete' as const, at: now, doing: undefined }))
       startAnimating(now)
       setStatus($, undefined)
     }
@@ -287,13 +353,16 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
+    const input = e as unknown as Record<string, unknown>
     const mutates = tool === 'Bash' || tool === 'Write' || tool === 'Edit' || tool === 'MultiEdit' || tool === 'NotebookEdit'
     const cwd = await $.session.cwd()
-    const targets = await targetsOf($, tool, e as unknown as Record<string, unknown>, cwd).catch(() => [] as Located[])
-    if (targets.length === 0 && !mutates) return next(e)
+    const targets = await targetsOf($, tool, input, cwd).catch(() => [] as Located[])
 
     const startedAt = await $.clock.now()
     startAnimating(startedAt)
+    // Work that names no file still shows on the prompt line while it runs.
+    const doing = targets.length === 0 ? { text: doingOf(tool, input), at: startedAt } : undefined
+    if (doing !== undefined) await update($, turn, info => ({ ...info, doing }))
     // A new file appears the moment Claude starts creating it; a file the
     // last scan missed joins the tree as Claude reaches it.
     const known = new Set((await read($, tree)).map(t => t.p))
@@ -312,15 +381,28 @@ export const register: Register = on => {
       if (first) setStatus($, `${ICON[first.op]} ${LABEL[first.op]} ${first.path}`)
     }
 
-    const replays = await replaysOf($, tool, e as unknown as Record<string, unknown>, targets, cwd)
+    const replays = await replaysOf($, tool, input, targets, cwd)
     const befores = await Promise.all(replays.map(t => textBefore($, t.file ?? '', t)))
 
-    const ran = await next(e)
+    const stopProgress = tool === 'Bash' ? watchProgress($, targets) : () => undefined
+    const ran = await next(e).finally(stopProgress)
     // A failing shell chain may still have changed files before the step that failed.
     const failed = ran.deny !== undefined || (ran.isError === true && tool !== 'Bash')
 
     const endedAt = await $.clock.now()
     startAnimating(endedAt)
+    if (doing !== undefined) {
+      await update($, turn, info => (info.doing?.at === doing.at && info.doing.text === doing.text ? { ...info, doing: undefined } : info))
+    }
+    // The files a search or listing turned up flash as read.
+    const matched = failed || !OUTPUT_LISTERS.has(tool) || ran.text === undefined ? [] : matchesIn(ran.text, cwd, known).filter(p => !targets.some(t => t.path === p))
+    if (matched.length > 0) {
+      await update($, activity, map => ({
+        ...map,
+        ...Object.fromEntries(matched.filter(p => !map[p]?.running).map(p => [p, { op: 'view' as const, startedAt: endedAt, endedAt, running: 0 }])),
+      }))
+      await update($, turn, info => matched.reduce((acc, p) => counted(acc, 'view', p), info))
+    }
     if (targets.length > 0) {
       await update($, activity, map => {
         const out = { ...map }

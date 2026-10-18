@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, mentionsOf, placeOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
+import { buildRows, classifyBash, diffTrees, doingOf, emptyTurn, focusOf, mentionsOf, placeOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
 import type { FolderMemory } from './model'
 
 // The test environment has it; the engine's typings leave it out.
@@ -358,4 +358,144 @@ test('a changelog rewritten by a python heredoc replays in the code view', async
   expect(shown).toContain('~:/site/CHANGELOG.md:1')
   expect(shown).toContain('CHANGELOG.md')
   await ui.unmount()
+})
+
+test('any command that names files is read, past patterns, programs and subcommands', async () => {
+  expect(classifyBash("awk -F: '{print $1}' a.txt")).toEqual([{ op: 'view', path: 'a.txt' }])
+  expect(classifyBash("grep -rn 'foo(' src")).toEqual([{ op: 'view', path: 'src' }])
+  expect(classifyBash('grep -e foo -e bar a.ts')).toEqual([
+    { op: 'view', path: 'foo' },
+    { op: 'view', path: 'bar' },
+    { op: 'view', path: 'a.ts' },
+  ])
+  expect(classifyBash('head -n 20 a.ts && tail -5 b.log && du -sh hooks && df -h /srv')).toEqual([
+    { op: 'view', path: '20' },
+    { op: 'view', path: 'a.ts' },
+    { op: 'view', path: 'b.log' },
+    { op: 'view', path: 'hooks' },
+    { op: 'view', path: '/srv' },
+  ])
+  expect(classifyBash('find src -type f -name x')).toEqual([{ op: 'view', path: 'src' }])
+  expect(classifyBash('git diff hooks/model.ts && python3 build.py && echo done.txt')).toEqual([
+    { op: 'view', path: 'hooks/model.ts' },
+    { op: 'view', path: 'build.py' },
+  ])
+  expect(classifyBash('wc -l hooks/*.ts')).toEqual([{ op: 'view', path: 'hooks/*.ts' }])
+  expect(classifyBash("sed -i 's/a/b/' src/*.ts")).toEqual([{ op: 'edit', path: 'src/*.ts' }])
+  expect(classifyBash('ln -s a.ts b.ts && install -m 644 run.sh bin/run')).toEqual([
+    { op: 'view', path: 'a.ts' },
+    { op: 'create', path: 'b.ts' },
+    { op: 'view', path: '644' },
+    { op: 'view', path: 'run.sh' },
+    { op: 'create', path: 'bin/run' },
+  ])
+  expect(classifyBash('dd if=disk.img of=copy.img bs=1M')).toEqual([
+    { op: 'view', path: 'disk.img' },
+    { op: 'edit', path: 'copy.img' },
+  ])
+  expect(classifyBash('curl -sL -o out.tar.gz https://x.dev/a && wget -O b.zip https://x.dev/b')).toEqual([
+    { op: 'edit', path: 'out.tar.gz' },
+    { op: 'edit', path: 'b.zip' },
+  ])
+  expect(classifyBash("timeout 30 env A=1 bash -c 'unlink old.ts'")).toEqual([{ op: 'delete', path: 'old.ts' }])
+  // Off this machine, only the known readers count: a stat can't weed out the other words.
+  expect(classifyBash('ssh web1 systemctl restart nginx.service && ssh web1 cat /etc/hosts')).toEqual([
+    { op: 'view', path: '/etc/hosts', host: 'web1' },
+  ])
+})
+
+test('scratchpad files get a top folder of their own', async () => {
+  expect(placeOf('/home/u/site', '/tmp/claude-1000/-home-u-site/0b6f0a4e-1111-4222-8333-944455556666/scratchpad/shot.png', '/home/u')).toEqual({
+    file: '/tmp/claude-1000/-home-u-site/0b6f0a4e-1111-4222-8333-944455556666/scratchpad/shot.png',
+    path: 'scratchpad:/shot.png',
+  })
+  expect(placeOf('/home/u/site', '/tmp/other.png', '/home/u')).toEqual({ file: '/tmp/other.png', path: 'local:/tmp/other.png' })
+})
+
+test('a call that touches no file shows on the prompt line while it runs', async () => {
+  expect(doingOf('Bash', { command: 'df -h\necho done' })).toBe('df -h')
+  expect(doingOf('WebSearch', { query: 'tokyo night' })).toBe('WebSearch tokyo night')
+  expect(doingOf('mcp__claude_ai_Todoist__add-tasks', {})).toBe('claude_ai_Todoist add-tasks')
+  const turn = { ...emptyTurn(), phase: 'working' as const, doing: { text: 'npm test', at: 0 } }
+  expect(text(statusLine({}, turn, 1500, 10, 80))).toContain('running npm test 1.5s')
+  for (const columns of [24, 40, 80]) {
+    const long = { ...turn, doing: { text: 'x'.repeat(200), at: 0 } }
+    expect(text(statusLine({}, long, 1500, 10, columns)).length).toBeLessThanOrEqual(columns)
+  }
+})
+
+test('a running copy shows how far it has got, as a share or in bytes', async () => {
+  const tree = [{ p: 'big.iso', d: false, m: 1 }]
+  const share = { 'big.iso': { op: 'create' as const, startedAt: 0, running: 1, bytes: 420, total: 1000 } }
+  const row = text(buildRows({ tree, activity: share, ghosts: {}, now: 1000, columns: 60, folders: new Map() })[0]?.segs ?? [])
+  expect(row).toContain('◂ creating 42% ')
+  expect(row).toContain('━')
+  expect(row.length).toBeLessThanOrEqual(60)
+  expect(text(statusLine(share, emptyTurn(), 1000, 1, 80))).toContain('42%')
+  const bytes = { 'big.iso': { op: 'create' as const, startedAt: 0, running: 1, bytes: 12_400_000 } }
+  expect(text(statusLine(bytes, emptyTurn(), 1000, 1, 80))).toContain('12 MB')
+})
+
+test('a copy fills its row as the file lands, a glob lights what it matches, a search what it found', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  const files: Record<string, { name: string; kind: 'file' | 'dir' }[]> = { ...FILES, '': [...(FILES[''] ?? []), { name: 'big.iso', kind: 'file' }] }
+  on('fs.list', ($, e) => {
+    const rel = !e.path || e.path === '' || e.path === '.' || e.path === ROOT ? '' : e.path.replace(/^\/proj\//, '').replace(/\/$/, '')
+    return { value: (files[rel] ?? []).map(f => ({ ...f, size: 1, mtimeMs: f.kind === 'file' ? 1 : 0, isLink: false })) }
+  })
+  const sizes: Record<string, number> = { '/proj/big.iso': 1000 }
+  on('fs.stat', ($, e) => (sizes[e.path] === undefined ? { deny: 'missing' } : { value: { kind: 'file', size: sizes[e.path], mtimeMs: 1, isLink: false } }) as never)
+  const held: Record<string, () => void> = {}
+  on('tool.call', { tool: 'Bash' }, ($, e) =>
+    new Promise(resolve => {
+      const command = String((e as { command?: unknown }).command)
+      const text = command.startsWith('grep') ? 'src/index.ts' : ''
+      held[command] = () => resolve({ result: { stdout: text, stderr: '' }, text } as never)
+    }),
+  )
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  const pane = async () => {
+    const ui = await $.ui.mount({
+      plugin: 'work-visualized',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'work-map',
+      props: { title: 'Claude Work', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    })
+    const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+    await ui.unmount()
+    return shown
+  }
+
+  const copying = $.tool.call({ tool: 'Bash', command: 'cp big.iso copy.iso' } as never)
+  await clock.settle()
+  sizes['/proj/copy.iso'] = 420
+  await clock.advance(500)
+  expect(await pane()).toContain('creating 42%')
+  held['cp big.iso copy.iso']?.()
+  await copying
+
+  const counting = $.tool.call({ tool: 'Bash', command: 'wc -l src/auth/*.ts' } as never)
+  await clock.settle()
+  const globbed = await pane()
+  expect(globbed).toContain('session.ts')
+  expect(globbed).toContain('types.ts')
+  expect(globbed).toContain('◂ reading')
+  held['wc -l src/auth/*.ts']?.()
+  await counting
+
+  const searching = $.tool.call({ tool: 'Bash', command: 'grep -rl login .' } as never)
+  await clock.settle()
+  expect(await pane()).toContain('running grep -rl login .')
+  held['grep -rl login .']?.()
+  await searching
+  await clock.advance(100)
+  expect(await pane()).toContain('✓ index.ts')
 })

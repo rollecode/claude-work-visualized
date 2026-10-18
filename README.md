@@ -20,7 +20,13 @@ deletes it, so you can see at a glance where Claude is working right now.
   to it, weaker the further up they are.
 - **Fading trail:** files Claude has touched stay marked and fade back to normal over about 60 s.
 - **Prompt line:** shows what Claude is doing, on which path, for how long, with a blinking
-  cursor.
+  cursor. A call that touches no file (`df -h`, a test run, a web search, an MCP tool) shows as
+  `running …` while it runs.
+- **Progress:** a running copy or download (`cp`, `rsync`, `scp`, `dd`, `curl -o`, `wget -O`, a
+  `>` redirect) shows how far it has got: a percentage and a filling bar when the source size is
+  known, otherwise the bytes landed so far.
+- **Searches and globs:** files a command's output lists (`grep -rl`, `find`, `ls`) flash as read,
+  and a glob (`wc -l src/*.ts`, `sed -i … *.md`) lights each file it matches.
 - **Code view:** each `Edit` and `Write`, and each file a shell command changes (`sed -i`, `>`,
   `tee`, or a script that rewrites a file it names), is replayed as keystrokes next to the tree: replaced
   lines turn red and fold away, new lines type in behind a caret, small changes are selected,
@@ -181,11 +187,13 @@ claude-work-visualized/
 
 ## Limitations
 
-- **Shell commands:** files touched by `rm`, `mv`, `cp`, `touch`, `mkdir`, `cat`, `sed -i`, `>`
-  and similar are recognised by reading the command text. Anything else is caught by the rescan
-  after the command and shown as finished, without a "running" phase.
-- **Other folders:** files outside the session folder show under `~:/` (your home folder) or
-  `local:/`. Shell commands are followed through `cd` and `NAME=value`.
+- **Shell commands:** files touched by `rm`, `mv`, `cp`, `touch`, `mkdir`, `sed -i`, `>` and
+  similar are recognised by reading the command text, and any other command reads the existing
+  files it names. A change no command names is caught by the rescan after it and shown as
+  finished, without a "running" phase.
+- **Other folders:** files outside the session folder show under `~:/` (your home folder),
+  `scratchpad:/` (Claude Code's scratch folder for the session) or `local:/`. Shell commands are
+  followed through `cd` and `NAME=value`.
 - **Remote work:** only what the command text names is shown; remote folders are not scanned, so
   a change a remote script makes on its own is not seen.
 - **Changes made outside Claude:** they show up too, animated as if Claude had made them.
