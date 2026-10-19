@@ -90,9 +90,9 @@ rows). The rule also says how far HEAD is from its upstream, e.g. `git main 2 ah
 | push | `↑` | orange | ahead and behind are counted again |
 | pull, fetch | `↓` | blue | the same |
 | reset | `←` | red | HEAD moves |
-| `gh pr create` | `#` | green | a rounded PR card under the graph: `#4 open`, `head → base` |
+| `gh pr create` | `#` | green | a rounded PR card under the graph for 20 s: `#4 open`, `head → base`; then only the rule names it, `git main · #4 open`. `/prs` hides PRs |
 
-While the command runs, the HEAD row ends in `◂` and the action's name shimmers; afterwards the
+While the command runs, the prompt line says what it does, shimmering in the action's colour (`❯ committing Add notes 0.4s █`, `❯ merging feature`, `❯ pushing origin`), and the HEAD row ends in `◂` and the action's name. A commit's message waits above HEAD as a green `○` row until the commit lands; the new commit's subject then stays green, fading over 20 s. A command run in another repository (`cd ../other && git …`, `git -C`) shows that repository, named in the rule; afterwards the
 label stays and fades to muted over 20 s, or shows `✗` in red if the command failed. The section
 stays a minute after the last git command, then fades over 1.5 s.
 

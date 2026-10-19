@@ -26,7 +26,7 @@ This is Rolle's fork of [GrzeskoByte/claude-work-visualized](https://github.com/
 - **Quiet chat.** While the pane is shown, an edit's result in the chat is one line (`± Edited src/app.ts +3 -1`), because the pane already shows the diff.
 - **Remote work.** Files touched over `ssh`, `scp` and `rsync` show under a folder per host (`deploy@web1:/etc/nginx/…`), and the header names the host Claude is working on.
 - **Live thinking.** Claude's thinking types itself out under the prompt line at a pace you can read (a wave of dots and a seconds count hold its place until the words arrive), with a blinking cursor, in up to 12 lines. Scroll over it to read back. It stays until 20 seconds after the turn ends. Needs `"showThinkingSummaries": true` in `~/.claude/settings.json`: without it Claude Code receives thinking with no text.
-- **Git graph.** When Claude runs `git` or `gh`, a small branch graph appears under the prompt line: checkouts move the `◉` HEAD marker, new commits pop in, merges light up the joining lines, pushes and pulls count commits ahead and behind, and `gh pr create` / `gh pr merge` open a PR card. It stays for a minute after the last git command.
+- **Git graph.** When Claude runs `git` or `gh`, a small branch graph appears under the prompt line: checkouts move the `◉` HEAD marker, new commits pop in, merges light up the joining lines, pushes and pulls count commits ahead and behind, the prompt line names the action as it runs (`❯ committing Add notes 0.4s`) with the commit's message waiting green above HEAD, and `gh pr create` / `gh pr merge` show a PR card for 20 seconds, then just `#7 open` in the graph's title (`/prs` hides them). It stays for a minute after the last git command.
 - **Completion card.** When a turn ends, a card counts the files viewed, edited, created and deleted.
 - **Terminal friendly.** One-cell glyphs and box-drawing characters only, up to 30 fps while something moves, idle otherwise.
 
@@ -89,6 +89,7 @@ The pane works best when the chat stays short. The GIF above runs with these in 
 | --- | --- |
 | `/watch` | Opens or closes the pane. The choice is remembered across sessions. |
 | `/diffs` | Switches edit results in the chat between one line and the full diff. Also remembered. |
+| `/prs` | Shows or hides pull requests in the git graph. The choice is remembered across sessions. |
 
 - Closing the pane by hand also turns watching off, and the next `/watch` reopens it.
 - While a tool runs, the status line shows the current operation, for example `± edit src/app.ts`.

@@ -96,6 +96,12 @@ test('a PR card shows under the graph', async () => {
   expect(lines.some(l => l.includes('#4 open'))).toBe(true)
   expect(lines.some(l => l.includes('feature → main'))).toBe(true)
   for (const l of lines) expect(l.length).toBeLessThanOrEqual(39)
+  // After a while only the rule names it, and /prs hides it altogether.
+  const later = gitView(done, 30_000, 40, 10, ROOT)
+  expect(later.lines.map(text).some(l => l.includes('╭'))).toBe(false)
+  expect(later.label).toContain('#4 open')
+  expect(gitView(done, 1000, 40, 10, ROOT, 'hidden').lines.map(text).some(l => l.includes('#4'))).toBe(false)
+  expect(gitView(done, 1000, 40, 10, ROOT, 'hidden').label).not.toContain('#4')
 })
 
 test('a commit Claude runs shows on the graph in the pane', async ($, on) => {

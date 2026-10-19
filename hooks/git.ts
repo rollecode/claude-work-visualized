@@ -10,6 +10,7 @@ const GIT_FADE = 1500
 const POP = 700 // a new commit's dot grows in over this long
 const LABEL_FADE = 20_000 // the action's label fades back to muted over this long
 const LIT = 3000 // merge and rebase light the graph's lines this long
+const PR_CARD = 20_000 // the PR card shows this long after a PR opens or merges, then only the rule names it
 const MAX_COMMITS = 8
 const MAX_REFS = 3
 const PURPLE = '#bc8cff'
@@ -412,7 +413,7 @@ function refSegs(row: GitRow): Seg[] {
 
 function prLines(state: GitState, now: number, width: number): Seg[][] {
   const pr = state.pr
-  if (pr === undefined || width < 12) return []
+  if (pr === undefined || width < 12 || now - pr.at > PR_CARD) return []
   const col = pr.state === 'merged' ? PURPLE : COLOR.create
   const edge = mix(FAINT, col, smooth((now - pr.at) / 500))
   const title = ` #${pr.number} ${pr.state} `
@@ -438,13 +439,16 @@ function pendingRow(state: GitState, now: number, width: number): Seg[] | undefi
   return fit([...left, { t: ' '.repeat(Math.max(1, width - used - cells)) }, ...label], width)
 }
 
+/** Whether pull requests show: `/prs` hides them. */
+export type PrShown = 'shown' | 'hidden'
+
 /** The graph rows (at most `rows`), the action's label on HEAD, and the PR card; `root` is the session's folder. */
-export function gitView(state: GitState | null, now: number, columns: number, rows: number, root = ''): GitView {
+export function gitView(state: GitState | null, now: number, columns: number, rows: number, root = '', prs: PrShown = 'shown'): GitView {
   const fade = gitFade(state, now)
   if (state === null || fade >= 1) return { lines: [], label: '', fade: 1 }
   const width = columns - 1
   const faded = (segs: Seg[]) => (fade > 0 ? segs.map(s => (s.c === undefined ? s : { ...s, c: mix(s.c, FAINT, fade), b: false })) : segs)
-  const card = prLines(state, now, width)
+  const card = prs === 'shown' ? prLines(state, now, width) : []
   const pending = pendingRow(state, now, width)
   const room = Math.max(1, rows - card.length - (pending === undefined ? 0 : 1))
   const since = state.endedAt === undefined ? 0 : now - state.endedAt
@@ -464,5 +468,6 @@ export function gitView(state: GitState | null, now: number, columns: number, ro
   })
   const counts = `${state.ahead ? ` ${state.ahead} ahead` : ''}${state.behind ? ` ${state.behind} behind` : ''}`
   const name = state.dir.replace(/\/+$/, '') === root.replace(/\/+$/, '') ? '' : ` ${state.dir.replace(/\/+$/, '').split('/').pop() ?? ''}`
-  return { lines: [...(pending === undefined ? [] : [faded(pending)]), ...lines, ...card.map(faded)], label: `git${name} ${state.head}${counts}`, fade }
+  const pr = prs === 'shown' && state.pr !== undefined ? ` · #${state.pr.number} ${state.pr.state}` : ''
+  return { lines: [...(pending === undefined ? [] : [faded(pending)]), ...lines, ...card.map(faded)], label: `git${name} ${state.head}${counts}${pr}`, fade }
 }

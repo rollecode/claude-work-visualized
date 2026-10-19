@@ -10,7 +10,7 @@ import {
   AHEAD_ARGV, gitActionsOf, gitDoingOf, gitEnded, gitFade, gitRead, gitStarted, gitView, graphArgv, mainAction, parseGraph, prBaseOf, prNumberOf, refsAfter,
   repoDir,
 } from './git'
-import type { GitRead } from './git'
+import type { GitRead, PrShown } from './git'
 import {
   CLAUDE, COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
   baseName, buildRows, classifyBash, counted, doingOf, mentionsOf, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
@@ -57,6 +57,7 @@ let animateUntil = 0
 let isWatching = true // mirrors the watching atom for synchronous checks
 let home: string | undefined
 let chatDiffs: ChatDiffs = 'quiet'
+let prs: PrShown = 'shown'
 let scanning: Promise<unknown> = Promise.resolve()
 let lastListed: ReadonlySet<string> = new Set() // folders the last scan listed in full
 let changingCalls = 0 // tool calls that can change files, running now
@@ -293,6 +294,11 @@ export const register: Register = on => {
       description: 'Toggle Claude Work Visualized: the live map of where Claude is working',
     }).catch(() => undefined)
     await $.command.register({
+      name: 'prs',
+      description: 'Toggle pull requests in the work pane\'s git graph',
+    }).catch(() => undefined)
+    prs = (await $.store.get('prs').catch(() => undefined)) === 'hidden' ? 'hidden' : 'shown'
+    await $.command.register({
       name: 'diffs',
       description: 'Toggle full edit diffs in the chat while the work pane replays them',
     }).catch(() => undefined)
@@ -390,6 +396,13 @@ export const register: Register = on => {
         <Text color={MUTED}> · in the work pane</Text>
       </Box>
     )
+  })
+
+  on('command.run', { command: 'prs' }, async $ => {
+    prs = prs === 'shown' ? 'hidden' : 'shown'
+    await $.store.set('prs', prs).catch(() => undefined)
+    $.ui.invalidate('ui.render')
+    return { text: prs === 'shown' ? 'Pull requests show in the git graph.' : 'Pull requests are hidden from the git graph. /prs shows them again.' }
   })
 
   on('command.run', { command: 'watch' }, async $ => {
@@ -704,7 +717,7 @@ export const register: Register = on => {
     }
 
     function gitSection(columns: number, rows: number) {
-      const gv = gitView(gs, now, columns, rows, sessionRoot)
+      const gv = gitView(gs, now, columns, rows, sessionRoot, prs)
       const used = gv.lines.length > 0 ? gv.lines.length + 1 : 0
       const els = used === 0 ? [] : [rule(gv.label, 'rg', columns, mix(CLAUDE, FAINT, gv.fade)), ...gv.lines.map((segs, i) => line(segs, `git${i}`))]
       return { els, rows: used }
@@ -735,7 +748,7 @@ export const register: Register = on => {
 
     // From SPLIT_COLUMNS wide, what Claude is doing (thinking, git, the code view) goes beside the tree.
     const hasThinking = thoughtView({ thought: th, typed: typed.n, now, turn: info, columns: 40, rows: 1 }).lines.length > 0
-    const hasGit = gitView(gs, now, 40, 1, sessionRoot).lines.length > 0
+    const hasGit = gitView(gs, now, 40, 1, sessionRoot, prs).lines.length > 0
     const isSplit = paneColumns >= SPLIT_COLUMNS && (clip !== undefined || hasThinking || hasGit)
     if (isSplit) {
       const treeColumns = Math.max(30, Math.min(48, Math.floor(paneColumns * 0.4)))
