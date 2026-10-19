@@ -1,8 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import {
-  buildRows, classifyBash, diffTrees, emptyTurn, focusOf, mentionsOf, placeOf, relPath, remotePath, statusLine, summaryLines, T, thoughtLines,
-  typeTo, withThought, wrapWords,
+  buildRows, classifyBash, diffTrees, emptyTurn, focusOf, mentionsOf, placeOf, relPath, remotePath, statusLine, summaryLines, T, thoughtRows,
+  thoughtView, typeTo, withThought, wrapWords,
 } from './model'
 import type { FolderMemory } from './model'
 
@@ -465,27 +465,40 @@ test('thinking is kept as one line, a new block starting over', async () => {
   expect(withThought(b, 'k2', 'Next.', 20)).toEqual({ key: 'k2', text: 'Next.', dropped: 0, at: 20 })
 })
 
-test('the typewriter keeps a steady pace and catches up when behind', async () => {
-  expect(typeTo(0, 10, 33)).toBeLessThan(10)
-  expect(typeTo(0, 10, 2000)).toBe(10)
-  expect(typeTo(0, 4000, 1000)).toBe(4000)
+test('the typewriter keeps a reading pace and speeds up only when far behind', async () => {
+  expect(typeTo(0, 100, 1000)).toBe(35)
+  expect(typeTo(0, 4000, 1000)).toBeGreaterThan(300)
   expect(typeTo(5, 5, 33)).toBe(5)
 })
 
-test('thinking wraps to the pane, shows its last lines and fades once done', async () => {
+test('thinking wraps, shows a share of the pane, scrolls, and fades a while after the turn', async () => {
   expect(wrapWords('one two three', 7)).toEqual(['one two', 'three'])
   expect(wrapWords('abcdefghij', 4)).toEqual(['abcd', 'efgh', 'ij'])
+  expect(thoughtRows(10)).toBe(4)
+  expect(thoughtRows(30)).toBe(9)
+  expect(thoughtRows(100)).toBe(12)
+  const working = { ...emptyTurn(), phase: 'working' as const }
   const long = withThought(null, 'k', 'word '.repeat(60), 0)
-  const lines = thoughtLines(long, 10_000, 100, 30)
-  expect(lines.length).toBe(3)
-  for (const l of lines) expect(text(l).length).toBeLessThanOrEqual(30)
-  expect(text(lines[2] ?? [])).toContain('▏')
-  const half = thoughtLines(withThought(null, 'k', 'Reading the config', 0), 7, 100, 40)
-  expect(text(half.flat())).toBe(' Reading▏')
+  const view = (top?: number) => thoughtView({ thought: long, typed: 10_000, now: 100, turn: working, columns: 30, rows: 4, top })
+  expect(view().lines.length).toBe(4)
+  expect(view().below).toBe(0)
+  expect(view().above).toBeGreaterThan(0)
+  for (const l of view().lines) expect(text(l).length).toBeLessThanOrEqual(30)
+  expect(text(view().lines[3] ?? [])).toContain('▏')
+  expect(view(0).above).toBe(0)
+  expect(view(0).below).toBeGreaterThan(0)
+  expect(view(999).below).toBe(0)
+  const half = thoughtView({ thought: withThought(null, 'k', 'Reading the config', 0), typed: 7, now: 100, turn: working, columns: 40, rows: 4 })
+  expect(text(half.lines.flat())).toBe(' Reading▏')
   const done = { ...withThought(null, 'k', 'Done.', 0), endedAt: 1000 }
-  expect(text(thoughtLines(done, 5, 2000, 40).flat())).toBe(' Done.')
-  expect(thoughtLines(done, 5, 1000 + T.thoughtLinger + T.thoughtFade + 1, 40)).toEqual([])
-  expect(thoughtLines(withThought(null, 'k', '', 0), 0, 100, 40)).toEqual([])
+  const ended: ReturnType<typeof emptyTurn> = { ...emptyTurn(), phase: 'complete', at: 2000 }
+  const at = (now: number, turn = ended) => thoughtView({ thought: done, typed: 5, now, turn, columns: 40, rows: 4 }).lines
+  expect(text(at(2000).flat())).toBe(' Done.')
+  expect(at(60_000, working).length).toBe(1)
+  expect(at(2000 + T.thoughtLinger - 1).length).toBe(1)
+  expect(at(2000 + T.thoughtLinger + T.thoughtFade + 1)).toEqual([])
+  expect(at(2000 + T.thoughtLinger + T.thoughtFade + 1).length).toBe(0)
+  expect(thoughtView({ thought: withThought(null, 'k', '', 0), typed: 0, now: 100, turn: working, columns: 40, rows: 4 }).lines).toEqual([])
 })
 
 test('thinking streamed in a step types itself into the pane', async ($, on) => {
@@ -533,4 +546,45 @@ test('thinking streamed in a step types itself into the pane', async ($, on) => 
     expect(shown).toContain('Checking how the config is loaded')
     await again.unmount()
   }
+})
+
+test('the wheel over the thinking section scrolls back through the thought', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', () => ({ value: [] }))
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('turn.step', async function* () {
+    yield { kind: 'thinking', index: 0, text: 'First idea. ' + 'more '.repeat(150) }
+    return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await $.turn.start({ turnId: 't1', source: 'prompt' } as never).catch(() => undefined)
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 })
+  for (let step = await stream.next(); step.done !== true; step = await stream.next()) {}
+
+  const mount = () => $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  const shownBy = async (ui: Awaited<ReturnType<typeof mount>>) => (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  const ui = await mount()
+  await clock.advance(30_000)
+  await ui.unmount()
+  const typed = await mount()
+  expect(await shownBy(typed)).toContain('thinking ↑')
+  expect(await shownBy(typed)).not.toContain('First idea.')
+  await typed.unmount()
+
+  await $.ui.scroll({ component: 'Pane', requestId: 'work-map', by: -50, offset: 0, bodyRows: 30, contentRows: 30, origin: { kind: 'person' }, pointer: { column: 5, row: 4 } } as never)
+  const back = await mount()
+  expect(await shownBy(back)).toContain('First idea.')
+  expect(await shownBy(back)).toContain('↓')
+  await back.unmount()
 })

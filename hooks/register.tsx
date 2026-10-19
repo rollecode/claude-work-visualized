@@ -2,12 +2,14 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Activity, Clip, Ghost, Op, Thought, TreeEntry, TurnInfo } from '../types'
-import { HOLD, MAX_BYTES, browseAfter, clipKey, clipOf, codeLines, codeRule, currentClip, enqueue, fileLines, isClipDone, patchStats } from './code'
+import {
+  HOLD, MAX_BYTES, WHEEL_LINES, browseAfter, clipKey, clipOf, codeLines, codeRule, currentClip, enqueue, fileLines, isClipDone, isOverCode, patchStats,
+} from './code'
 import type { Browse, CodeArea } from './code'
 import {
   CLAUDE, COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
   buildRows, classifyBash, counted, mentionsOf, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
-  placeOf, remotePath, scrollTo, staleKeys, statusLine, summaryLines, thoughtFade, thoughtLines, typeTo, withPath, withThought, withoutPath,
+  placeOf, remotePath, scrollTo, staleKeys, statusLine, summaryLines, thoughtRows, thoughtView, typeTo, withPath, withThought, withoutPath,
 } from './model'
 import type { FolderMemory, Seg, Target } from './model'
 
@@ -39,6 +41,9 @@ let browse: Browse | undefined // the person scrolling through the edited file
 let codeArea: CodeArea | undefined // where the code view was drawn last frame
 let shownClip: Clip | undefined
 let typed = { key: '', n: 0, at: 0 } // how far the typewriter has got through the thought
+let thinkBrowse: Browse | undefined // the person scrolling back through the thought
+let thinkArea: CodeArea | undefined // where the thinking section was drawn last frame
+let thinkTop = 0 // the thought's first line shown last frame
 let animateUntil = 0
 let isWatching = true // mirrors the watching atom for synchronous checks
 let home: string | undefined
@@ -474,6 +479,13 @@ export const register: Register = on => {
 
   // The wheel, a touchpad or the scroll keys over the code view move through the edited file.
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const th = await read($, thought)
+    if (th !== null && thinkArea !== undefined && e.pointer !== undefined && isOverCode(e.pointer, thinkArea)) {
+      const from = thinkBrowse?.key === th.key ? thinkBrowse.top : thinkTop
+      thinkBrowse = { key: th.key, top: Math.max(0, from + e.by * WHEEL_LINES), at: await $.clock.now() }
+      $.ui.invalidate('ui.render')
+      return {}
+    }
     const moved = browseAfter(browse, shownClip, codeArea, e, await $.clock.now())
     if (moved === undefined) return next(e)
     browse = moved
@@ -493,6 +505,8 @@ export const register: Register = on => {
       if (th.key !== typed.key) typed = { key: th.key, n: th.dropped, at: now }
       typed = { key: th.key, n: typeTo(typed.n, th.dropped + th.text.length, Math.min(250, now - typed.at)), at: now }
     }
+    // A scrolled thought stays put until a new one starts or the person leaves it a while.
+    if (thinkBrowse !== undefined && (th === null || thinkBrowse.key !== th.key || now - thinkBrowse.at > HOLD)) thinkBrowse = undefined
     const root = (await $.session.cwd()).replace(/\/+$/, '').split('/').pop() ?? ''
     const paneColumns = Math.max(24, (e.props.bodyColumns ?? 40) - 1)
     const height = Math.max(8, e.props.scroll?.bodyRows ?? (e.viewport?.rows ?? 30) - 3)
@@ -559,8 +573,15 @@ export const register: Register = on => {
         line([{ t: '── ', c: FAINT }, { t: label, c, b: true }, { t: ' ' + '─'.repeat(Math.max(0, columns - label.length - 4)), c: FAINT }], key)
 
       const rows = buildRows({ tree: entries, activity: act, ghosts: gh, now, columns, folders })
-      const thinking = thoughtLines(th, typed.n, now, columns)
+      const think = thoughtView({ thought: th, typed: typed.n, now, turn: info, columns, rows: thoughtRows(height), top: thinkBrowse?.top })
+      const thinking = think.lines
+      thinkTop = think.top
+      // Scrolled back down to the end: follow the typing again.
+      if (thinkBrowse !== undefined && think.below === 0) thinkBrowse = undefined
+      else if (thinkBrowse !== undefined) thinkBrowse = { ...thinkBrowse, top: think.top }
       const thinkingRows = thinking.length > 0 ? thinking.length + 1 : 0
+      thinkArea = thinkingRows > 0 ? { column: 0, row: 2, columns, rows: thinkingRows } : undefined
+      const thinkLabel = `thinking${think.above > 0 ? ` ↑${think.above}` : ''}${think.below > 0 ? ` ↓${think.below}` : ''}`
       const summary = summaryLines(info, now, columns - 4)
       const legend = legendLines(columns)
       const chrome = 3 + 1 + legend.length + 1 + (summary.length > 0 ? summary.length + 2 : 0) + thinkingRows + underRows
@@ -582,7 +603,7 @@ export const register: Register = on => {
         <Box flexDirection="column" width={columns} flexGrow={1}>
           {line(headerLine(now, focus !== undefined || info.phase === 'working', root, remoteOf(act, now)), 'h')}
           {line(statusLine(act, info, now, fileCount, columns), 's')}
-          {thinking.length > 0 && rule('thinking', 'r0', mix(CLAUDE, FAINT, thoughtFade(th, typed.n, now)))}
+          {thinking.length > 0 && rule(thinkLabel, 'r0', mix(CLAUDE, FAINT, think.fade))}
           {thinking.map((segs, i) => line(segs, `th${i}`))}
           {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1')}
           {rows.length === 0 ? line([{ t: ' scanning…', c: MUTED }], 'empty') : visible.map(r => line(r.segs, r.key))}

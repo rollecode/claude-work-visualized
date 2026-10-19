@@ -83,10 +83,13 @@ A deleted folder shows as a single fading row instead of one row per file inside
   - idle: `❯ idle · N files █`
   - The block cursor always blinks.
 - **Thinking:** while Claude thinks, a `── thinking ──` section under the prompt line types the
-  thought out at about 120 characters a second, faster when it falls behind the stream, so the
-  backlog is gone within about 0.8 s. It shows the last 3 lines, whitespace collapsed, older lines
-  dimmer and the newest letters bright at a blinking `▏` cursor. Once the thought has ended and
-  been typed out it stays for 6 s, then fades over 1.5 s. A new thinking block starts it over.
+  thought out at a reading pace of 35 characters a second. It only speeds up once it is more than
+  400 characters behind the stream. Whitespace is collapsed, older lines are dimmer and the newest
+  letters bright at a blinking `▏` cursor. The section is 30 % of the pane's height, 4 to 12 lines,
+  and the rule shows `↑N` / `↓N` for lines out of view. The wheel over the section scrolls the
+  thought; it stays where you left it for 20 s, or until you scroll back to the end. The thought
+  stays for the whole turn and 20 s after it, then fades over 1.5 s. A new thinking block starts it
+  over.
 - **Section rules:** `── tree ──` (with `↑N` when scrolled) and `── legend ──`.
 - **Completion card:** a rounded box whose border fades in. `✓ TASK COMPLETE` appears letter by
   letter, then one row per operation slides in about 120 ms apart, its count and `━━━` bar

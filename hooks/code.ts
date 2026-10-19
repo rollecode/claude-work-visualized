@@ -635,7 +635,7 @@ export function isOverCode(pointer: { column: number; row: number }, area: CodeA
 /** The person's place in a clip's file while they scroll it: its top line, and when they last moved. */
 export type Browse = { key: string; top: number; at: number }
 
-const WHEEL_LINES = 2 // lines one wheel or touchpad tick moves the file
+export const WHEEL_LINES = 2 // lines one wheel or touchpad tick moves the file
 
 /**
  * Where a scroll leaves the person in the code view's file, or undefined
