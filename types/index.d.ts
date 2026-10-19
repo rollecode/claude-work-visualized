@@ -67,7 +67,14 @@ export type Thought = {
 export type GitKind = 'checkout' | 'branch' | 'commit' | 'merge' | 'rebase' | 'push' | 'pull' | 'fetch' | 'reset' | 'pr' | 'pr-merge'
 
 /** One git or gh command Claude ran, as the git view shows it. */
-export type GitAction = { kind: GitKind; ref?: string }
+export type GitAction = {
+  kind: GitKind
+  ref?: string
+  /** A commit's message, from `-m`. */
+  message?: string
+  /** Where the command ran, from `cd` and `git -C`, as written; `?` when it can't be known. */
+  dir?: string
+}
 
 /** One row of `git log --graph`: the graph cells, and the commit on it if any. */
 export type GitRow = { graph: string; hash?: string; refs?: string[]; subject?: string; isHead?: boolean }
@@ -75,6 +82,8 @@ export type GitRow = { graph: string; hash?: string; refs?: string[]; subject?: 
 /** The git view: the graph read after Claude's last git command, and what that command did. */
 export type GitState = {
   rows: GitRow[]
+  /** The repository the graph is read from. */
+  dir: string
   /** The checked-out branch, or the short hash when detached. */
   head: string
   /** Commits ahead of and behind the upstream branch, when there is one. */

@@ -42,6 +42,20 @@ const KIND_GLYPH: Record<GitKind, string> = {
   pr: '#',
   'pr-merge': '◆',
 }
+// What the prompt line says while the command runs.
+const KIND_DOING: Record<GitKind, string> = {
+  checkout: 'checking out',
+  branch: 'branching',
+  commit: 'committing',
+  merge: 'merging',
+  rebase: 'rebasing',
+  push: 'pushing',
+  pull: 'pulling',
+  fetch: 'fetching',
+  reset: 'resetting',
+  pr: 'opening PR',
+  'pr-merge': 'merging PR',
+}
 const KIND_VERB: Record<GitKind, string> = {
   checkout: 'checkout',
   branch: 'branch',
@@ -65,9 +79,35 @@ const pulse = (now: number, period: number, phase = 0) => (Math.sin(((now - phas
 
 // ---------------------------------------------------------------- commands
 
-const SEPARATORS = /&&|\|\||;|\||\n/
 const PREFIXES = new Set(['sudo', 'command', 'exec', 'time'])
 const GLOBALS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace'])
+
+/** A command split on `&&`, `||`, `;`, `|` and new lines outside quotes. */
+function segmentsOf(command: string): string[] {
+  const out: string[] = []
+  let text = ''
+  let quote: string | undefined
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i] ?? ''
+    if (quote !== undefined) {
+      if (ch === '\\' && quote === '"') {
+        text += ch + (command[++i] ?? '')
+        continue
+      }
+      if (ch === quote) quote = undefined
+      text += ch
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+      text += ch
+    } else if (ch === ';' || ch === '|' || ch === '\n' || (ch === '&' && command[i + 1] === '&')) {
+      if (command[i + 1] === ch) i++
+      out.push(text)
+      text = ''
+    } else text += ch
+  }
+  out.push(text)
+  return out.filter(s => s.trim() !== '')
+}
 
 function words(segment: string): string[] {
   const out: string[] = []
@@ -76,23 +116,58 @@ function words(segment: string): string[] {
   return out
 }
 
-/** The git and gh commands in a shell command that change branches, commits or remotes. */
+/** The git and gh commands in a shell command that change branches, commits or remotes, with where each ran. */
 export function gitActionsOf(command: string): GitAction[] {
   const out: GitAction[] = []
-  for (const segment of command.split(SEPARATORS)) {
-    let w = words(segment.trim())
-    while (w[0] !== undefined && (/^\w+=/.test(w[0]) || PREFIXES.has(w[0]))) w = w.slice(1)
-    const action = w[0] === 'git' ? gitAction(w.slice(1)) : w[0] === 'gh' ? ghAction(w.slice(1)) : undefined
-    if (action !== undefined) out.push(action)
+  // What `cd` and `NAME=value` set earlier in the command, for the commands after them.
+  let dir: string | undefined
+  const vars = new Map<string, string>()
+  const expand = (w: string) => w.replace(/\$\{(\w+)\}|\$(\w+)/g, (all, braced?: string, bare?: string) => vars.get(braced ?? bare ?? '') ?? all)
+  const join = (to: string) => (to.includes('$') || dir === '?' ? '?' : dir === undefined || to.startsWith('/') || to.startsWith('~') ? to : `${dir}/${to}`)
+  for (const segment of segmentsOf(command)) {
+    let w = words(segment.trim()).map(expand)
+    while (w[0] !== undefined && (/^\w+=/.test(w[0]) || PREFIXES.has(w[0]))) {
+      const set = /^(\w+)=(.*)$/.exec(w[0])
+      if (set) vars.set(set[1] ?? '', set[2] ?? '')
+      w = w.slice(1)
+    }
+    if (w[0] === 'cd') {
+      dir = w[1] === undefined ? '~' : join(w[1])
+      continue
+    }
+    const action = w[0] === 'git' ? gitAction(w.slice(1), command) : w[0] === 'gh' ? ghAction(w.slice(1)) : undefined
+    if (action === undefined) continue
+    const where = action.dir === undefined ? dir : join(action.dir)
+    out.push({ ...action, ...(where === undefined ? {} : { dir: where }) })
   }
   return out
 }
 
-function gitAction(args: readonly string[]): GitAction | undefined {
+/** A commit's message: `-m msg`, `--message=msg`, or the first line of a `-m "$(cat <<EOF …)"` heredoc. */
+function messageOf(args: readonly string[], command: string): string | undefined {
+  const heredoc = /-m\s+"\$\(cat\s+<<-?\s*'?(\w+)'?\s*\n\s*([^\n]*)/.exec(command)?.[2]
+  if (heredoc !== undefined) return heredoc.trim()
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? ''
+    if (a === '-m' || a === '--message' || /^-[a-zA-Z]*m$/.test(a)) return args[i + 1]?.split('\n')[0]
+    const inline = /^(?:--message=|-m)(.+)$/.exec(a)
+    if (inline) return inline[1]?.split('\n')[0]
+  }
+  return undefined
+}
+
+function gitAction(args: readonly string[], command: string): GitAction | undefined {
   let i = 0
-  while (i < args.length && (args[i] ?? '').startsWith('-')) i += GLOBALS_WITH_VALUE.has(args[i] ?? '') ? 2 : 1
-  const sub = args[i]
-  const rest = args.slice(i + 1)
+  let dir: string | undefined
+  while (i < args.length && (args[i] ?? '').startsWith('-')) {
+    if (args[i] === '-C') dir = args[i + 1]
+    i += GLOBALS_WITH_VALUE.has(args[i] ?? '') ? 2 : 1
+  }
+  const action = subAction(args[i], args.slice(i + 1), command)
+  return action === undefined || dir === undefined ? action : { ...action, dir }
+}
+
+function subAction(sub: string | undefined, rest: readonly string[], command: string): GitAction | undefined {
   const first = rest.find(a => !a.startsWith('-'))
   const has = (...flags: string[]) => rest.some(a => flags.includes(a))
   switch (sub) {
@@ -107,7 +182,10 @@ function gitAction(args: readonly string[]): GitAction | undefined {
     case 'branch':
       if (first === undefined || has('-d', '-D', '--delete', '-m', '-M', '--move', '--list', '-l')) return undefined
       return { kind: 'branch', ref: first }
-    case 'commit':
+    case 'commit': {
+      const message = messageOf(rest, command)
+      return { kind: 'commit', ...(message === undefined || message === '' ? {} : { message }) }
+    }
     case 'cherry-pick':
     case 'revert':
       return { kind: 'commit' }
@@ -133,6 +211,32 @@ function ghAction(args: readonly string[]): GitAction | undefined {
     return { kind: 'pr-merge', ...(n === undefined ? {} : { ref: n.replace('#', '') }) }
   }
   return undefined
+}
+
+const RANK: Record<GitKind, number> = {
+  commit: 3, merge: 3, rebase: 3, push: 3, pr: 3, 'pr-merge': 3,
+  checkout: 2, branch: 2, reset: 2,
+  pull: 1, fetch: 1,
+}
+
+/** The action a command is shown as: the weightiest, the last of those when there are several. */
+export function mainAction(actions: readonly GitAction[]): GitAction | undefined {
+  return actions.reduce<GitAction | undefined>((best, a) => (best === undefined || RANK[a.kind] >= RANK[best.kind] ? a : best), undefined)
+}
+
+/** The repository a command ran in, from the session's folder; undefined when a variable hides it. */
+export function repoDir(dir: string | undefined, cwd: string, home: string | undefined): string | undefined {
+  const root = cwd.replace(/\/+$/, '')
+  if (dir === undefined) return root
+  if (dir === '?' || (dir.startsWith('~') && home === undefined)) return undefined
+  const full = dir.startsWith('~') ? `${home}${dir.slice(1)}` : dir.startsWith('/') ? dir : `${root}/${dir}`
+  const parts: string[] = []
+  for (const part of full.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+  return '/' + parts.join('/')
 }
 
 /** The branches to draw beside HEAD after an action: the one it named, and where a checkout came from. */
@@ -196,20 +300,27 @@ export function headOf(rows: readonly GitRow[]): string {
 
 // ---------------------------------------------------------------- state
 
-export function gitStarted(state: GitState | null, action: GitAction, now: number): GitState {
-  const { endedAt: _ended, isFailed: _failed, ...base } = state ?? { rows: [], head: '', refs: [], fresh: [], at: now }
-  return { ...base, action, at: now }
+/** A command starts in repository `dir`: another repository than the last one starts the view over. */
+export function gitStarted(state: GitState | null, action: GitAction, now: number, dir: string): GitState {
+  const fresh: GitState = { rows: [], dir, head: '', refs: [], fresh: [], at: now }
+  const { endedAt: _ended, isFailed: _failed, ...base } = state === null || state.dir !== dir ? fresh : state
+  return { ...base, action, at: now, fresh: [] }
 }
 
 export type GitRead = { rows: GitRow[]; ahead?: number; behind?: number }
 
-export function gitEnded(state: GitState, read: GitRead | undefined, refs: string[], isFailed: boolean, now: number): GitState {
-  if (read === undefined) return { ...state, endedAt: now, isFailed }
+/** The graph read again, mid-command or after it; commits it didn't have are added to the fresh ones. */
+export function gitRead(state: GitState, read: GitRead): GitState {
   const had = new Set(state.rows.map(r => r.hash).filter(h => h !== undefined))
-  const fresh = had.size === 0 ? [] : read.rows.map(r => r.hash).filter((h): h is string => h !== undefined && !had.has(h))
+  const added = had.size === 0 ? [] : read.rows.map(r => r.hash).filter((h): h is string => h !== undefined && !had.has(h))
   const { ahead: _ahead, behind: _behind, ...rest } = state
   const counts = { ...(read.ahead === undefined ? {} : { ahead: read.ahead }), ...(read.behind === undefined ? {} : { behind: read.behind }) }
-  return { ...rest, ...counts, rows: read.rows, head: headOf(read.rows), refs, fresh, endedAt: now, isFailed }
+  return { ...rest, ...counts, rows: read.rows, head: headOf(read.rows), fresh: [...state.fresh, ...added] }
+}
+
+export function gitEnded(state: GitState, read: GitRead | undefined, refs: string[], isFailed: boolean, now: number): GitState {
+  const base = read === undefined ? state : gitRead(state, read)
+  return { ...base, refs, endedAt: now, isFailed }
 }
 
 /** 0 while the view is shown, rising to 1 as it fades out a while after the last command. */
@@ -217,6 +328,16 @@ export function gitFade(state: GitState | null, now: number): number {
   if (state === null || state.rows.length === 0) return 1
   if (state.endedAt === undefined) return 0
   return smooth((now - state.endedAt - GIT_LINGER) / GIT_FADE)
+}
+
+/** The running git command as the prompt line names it, in the action's colour. */
+export type GitDoing = { verb: string; text: string; color: string; at: number }
+
+export function gitDoingOf(state: GitState | null): GitDoing | undefined {
+  const action = state?.action
+  if (state === null || action === undefined || state.endedAt !== undefined) return undefined
+  const text = action.message ?? (action.kind === 'pr-merge' && action.ref ? `#${action.ref}` : action.ref) ?? state.head
+  return { verb: KIND_DOING[action.kind], text, color: KIND_COLOR[action.kind], at: state.at }
 }
 
 // ---------------------------------------------------------------- drawing
@@ -305,19 +426,36 @@ function prLines(state: GitState, now: number, width: number): Seg[][] {
   ]
 }
 
-/** The graph rows (at most `rows`), the action's label on HEAD, and the PR card. */
-export function gitView(state: GitState | null, now: number, columns: number, rows: number): GitView {
+/** The commit being made, above HEAD while `git commit` runs: its message, shimmering green. */
+function pendingRow(state: GitState, now: number, width: number): Seg[] | undefined {
+  const action = state.action
+  if (action?.kind !== 'commit' || state.endedAt !== undefined || state.rows.length === 0) return undefined
+  const label = actionLabel(state, now)
+  const cells = label.reduce((n, s) => n + [...s.t].length, 0)
+  const lead: Seg[] = [{ t: ' ' }, { t: '○', c: mix(COLOR.create, '#d2f8dc', pulse(now, 700)), b: true }, { t: ' ' }]
+  const left = fit([...lead, ...shimmer(action.message ?? 'new commit', COLOR.create, now)], Math.max(0, width - cells - 1))
+  const used = left.reduce((n, s) => n + [...s.t].length, 0)
+  return fit([...left, { t: ' '.repeat(Math.max(1, width - used - cells)) }, ...label], width)
+}
+
+/** The graph rows (at most `rows`), the action's label on HEAD, and the PR card; `root` is the session's folder. */
+export function gitView(state: GitState | null, now: number, columns: number, rows: number, root = ''): GitView {
   const fade = gitFade(state, now)
   if (state === null || fade >= 1) return { lines: [], label: '', fade: 1 }
   const width = columns - 1
   const faded = (segs: Seg[]) => (fade > 0 ? segs.map(s => (s.c === undefined ? s : { ...s, c: mix(s.c, FAINT, fade), b: false })) : segs)
   const card = prLines(state, now, width)
-  const room = Math.max(1, rows - card.length)
+  const pending = pendingRow(state, now, width)
+  const room = Math.max(1, rows - card.length - (pending === undefined ? 0 : 1))
+  const since = state.endedAt === undefined ? 0 : now - state.endedAt
   const lines = state.rows.slice(0, room).map((row, i) => {
     const lead: Seg[] = [{ t: ' ' }, ...graphSegs(row, state, now, i), { t: ' ' }]
     if (row.hash === undefined) return faded(fit(lead, width))
-    const text: Seg[] = [...refSegs(row), { t: row.subject ?? '', c: row.isHead ? MUTED : mix(MUTED, FAINT, 0.3) }]
-    if (!row.isHead) return faded(fit([...lead, ...text], width))
+    // A commit that just landed keeps its subject green for a while.
+    const isFresh = state.fresh.includes(row.hash) && since < LABEL_FADE
+    const tone = isFresh ? mix(COLOR.create, MUTED, smooth(since / LABEL_FADE)) : row.isHead ? MUTED : mix(MUTED, FAINT, 0.3)
+    const text: Seg[] = [...refSegs(row), { t: row.subject ?? '', c: tone, b: isFresh && since < 2000 }]
+    if (!row.isHead || pending !== undefined) return faded(fit([...lead, ...text], width))
     const label = actionLabel(state, now)
     const labelCells = label.reduce((n, s) => n + [...s.t].length, 0)
     const left = fit([...lead, ...text], Math.max(0, width - labelCells - 1))
@@ -325,5 +463,6 @@ export function gitView(state: GitState | null, now: number, columns: number, ro
     return faded(fit([...left, { t: ' '.repeat(Math.max(1, width - used - labelCells)) }, ...label], width))
   })
   const counts = `${state.ahead ? ` ${state.ahead} ahead` : ''}${state.behind ? ` ${state.behind} behind` : ''}`
-  return { lines: [...lines, ...card.map(faded)], label: `git ${state.head}${counts}`, fade }
+  const name = state.dir.replace(/\/+$/, '') === root.replace(/\/+$/, '') ? '' : ` ${state.dir.replace(/\/+$/, '').split('/').pop() ?? ''}`
+  return { lines: [...(pending === undefined ? [] : [faded(pending)]), ...lines, ...card.map(faded)], label: `git${name} ${state.head}${counts}`, fade }
 }

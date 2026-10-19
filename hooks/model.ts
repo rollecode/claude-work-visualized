@@ -1003,13 +1003,28 @@ export function statusLine(
   now: number,
   fileCount: number,
   columns: number,
-  waited?: number,
+  extra: { waited?: number; git?: { verb: string; text: string; color: string; at: number } } = {},
 ): Seg[] {
+  const { waited, git } = extra
   const focus = focusOf(activity)
   const a = focus === undefined ? undefined : activity[focus]
   const cursor = (c: string): Seg => ({ t: '█', c: mix(c, FAINT, pulse(now, 1060)) })
   const shimmer = (text: string, c: string): Seg[] =>
     paint(text, i => ({ c: mix(c, '#ffffff', 0.7 * band(i, ((now / 70) % (text.length + 10)) - 5, 2.5)), b: true }))
+  // A git command names what it does to the repository, not the files it touches.
+  if (git !== undefined) {
+    const tail = ` ${(Math.max(0, now - git.at) / 1000).toFixed(1)}s`
+    const room = columns - 2 - git.verb.length - 1 - tail.length - 2
+    return [
+      { t: '❯ ', c: CLAUDE, b: true },
+      ...shimmer(git.verb, git.color),
+      { t: ' ' },
+      { t: truncate(git.text, room), c: BASE },
+      { t: tail, c: MUTED },
+      { t: ' ' },
+      cursor(git.color),
+    ]
+  }
   if (a !== undefined && focus !== undefined) {
     const col = COLOR[a.op]
     const others = Object.values(activity).filter(x => x.running > 0).length - 1
