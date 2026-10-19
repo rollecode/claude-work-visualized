@@ -566,7 +566,7 @@ export function isAnimating(
   thought: Thought | null = null,
 ): boolean {
   if (Object.keys(ghosts).length > 0) return true
-  if (thought !== null && (thought.endedAt === undefined || turn.phase === 'working' || now - Math.max(thought.endedAt, turn.at) < T.thoughtLinger + T.thoughtFade + 2000)) return true
+  if (thought !== null && (thought.endedAt === undefined || thought.waitingSince !== undefined || turn.phase === 'working' || now - Math.max(thought.endedAt, turn.at) < T.thoughtLinger + T.thoughtFade + 2000)) return true
   if (turn.phase === 'complete' && now - turn.at < T.summary + 1000) return true
   return Object.values(activity).some(a => levelOf(a, now) !== 'none')
 }
@@ -964,6 +964,7 @@ const THOUGHT_ROWS_MIN = 4
 const THOUGHT_ROWS_MAX = 12
 const THOUGHT_SHARE = 0.3 // of the pane's height
 const TYPE_CPS = 35 // a reading pace, characters a second
+const TYPE_LATE = 3 // how much faster text is typed once the thought has ended
 const TYPE_LAG = 400 // characters behind the stream before typing speeds up
 
 /** Appends a streamed piece of thinking; a new `key` starts a new thought. */
@@ -976,11 +977,15 @@ export function withThought(thought: Thought | null, key: string, piece: string,
   return { key, text: joined.slice(cut), dropped: (same ? thought.dropped : 0) + cut, at: now }
 }
 
-/** Moves the typewriter on by `dt` ms at a reading pace, speeding up only once far behind. */
-export function typeTo(typed: number, total: number, dt: number): number {
+/** `reading` while the thought streams; `late` once it has ended and the text still has to catch up. */
+export type TypePace = 'reading' | 'late'
+
+/** Moves the typewriter on by `dt` ms at its pace, speeding up only once far behind. */
+export function typeTo(typed: number, total: number, dt: number, pace: TypePace = 'reading'): number {
   if (typed >= total) return total
   const rush = 1 + Math.max(0, total - typed - TYPE_LAG) / TYPE_LAG
-  return Math.min(total, typed + (TYPE_CPS * rush * dt) / 1000)
+  const cps = TYPE_CPS * (pace === 'late' ? TYPE_LATE : 1)
+  return Math.min(total, typed + (cps * rush * dt) / 1000)
 }
 
 /** Greedy word wrap; a word longer than the line is broken. */
@@ -1035,8 +1040,16 @@ export type ThoughtView = { lines: Seg[][]; top: number; above: number; below: n
 export function thoughtView(scene: ThoughtScene): ThoughtView {
   const { thought, typed, now, turn, columns, rows, top } = scene
   const fade = top === undefined ? thoughtFade(thought, typed, now, turn) : 0
-  // Claude Code streams thinking empty unless `showThinkingSummaries` is on.
-  if (thought === null || thought.text === '' || fade >= 1) return { lines: [], top: 0, above: 0, below: 0, fade: 1 }
+  const none = { lines: [], top: 0, above: 0, below: 0, fade: 1 }
+  if (thought === null) return none
+  // Thinking text comes late, or never without `showThinkingSummaries`: this line holds its place.
+  if (thought.waitingSince !== undefined) {
+    const word = 'thinking…'
+    const secs = `${Math.floor(Math.max(0, now - thought.waitingSince) / 1000)}s`
+    const shine = (i: number) => band(i, ((now / 70) % (word.length + 10)) - 5, 2.5)
+    return { ...none, fade: 0, lines: [[{ t: ' ' }, ...paint(word, i => ({ c: mix(MUTED, '#ffffff', 0.6 * shine(i)) })), { t: ` ${secs}`, c: FAINT }]] }
+  }
+  if (thought.text === '' || fade >= 1) return none
   const total = thought.dropped + thought.text.length
   const isTyping = thought.endedAt === undefined || typed < total
   const shown = thought.text.slice(0, Math.max(0, Math.floor(typed) - thought.dropped))

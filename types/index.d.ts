@@ -55,6 +55,8 @@ export type Thought = {
   at: number
   /** Absent while the block is still streaming. */
   endedAt?: number
+  /** When the model request now streaming began, while no words of its thinking have come. */
+  waitingSince?: number
 }
 
 declare module 'claude-code' {

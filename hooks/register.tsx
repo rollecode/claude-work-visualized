@@ -360,31 +360,43 @@ export const register: Register = on => {
   // Thinking streams in pieces; the pane types each thought out as it arrives.
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined || !isWatching) return yield* next(e)
+    const begun = await $.clock.now()
+    await update($, thought, t => ({ ...(t ?? { key: '', text: '', dropped: 0, at: begun, endedAt: begun }), waitingSince: begun }))
+    startAnimating(begun)
     const stream = next(e)
-    let open: string | undefined
-    const close = async () => {
-      if (open === undefined) return
-      open = undefined
+    let isOpen = false
+    let isSettled = false
+    // The response has moved past thinking: stop waiting, and end the thought if this step had one.
+    const settle = async () => {
+      if (isSettled) return
+      isSettled = true
       const now = await $.clock.now()
-      await update($, thought, t => (t === null || t.endedAt !== undefined ? t : { ...t, endedAt: now }))
+      await update($, thought, t => {
+        if (t === null) return t
+        const { waitingSince: _, ...rest } = t
+        return isOpen && rest.endedAt === undefined ? { ...rest, endedAt: now } : rest
+      })
     }
     try {
       for (let step = await stream.next(); ; step = await stream.next()) {
         if (step.done === true) return step.value
         const chunk = step.value
-        if (chunk.kind === 'thinking') {
+        if (chunk.kind === 'thinking' && !isSettled) {
           const key = `${e.turnId}:${e.index}:${chunk.index}`
-          open = key
+          isOpen = true
           const now = await $.clock.now()
-          await update($, thought, t => withThought(t, key, chunk.text, now))
+          await update($, thought, t => {
+            const fresh = withThought(t, key, chunk.text, now)
+            return fresh.text === '' && t?.waitingSince !== undefined ? { ...fresh, waitingSince: t.waitingSince } : fresh
+          })
           startAnimating(now)
-        } else if (chunk.kind !== 'engine') {
-          await close()
+        } else if (chunk.kind !== 'engine' && chunk.kind !== 'thinking') {
+          await settle()
         }
         yield chunk
       }
     } finally {
-      await close()
+      await settle()
     }
   })
 
@@ -503,7 +515,8 @@ export const register: Register = on => {
     const th = await read($, thought)
     if (th !== null) {
       if (th.key !== typed.key) typed = { key: th.key, n: th.dropped, at: now }
-      typed = { key: th.key, n: typeTo(typed.n, th.dropped + th.text.length, Math.min(250, now - typed.at)), at: now }
+      const pace = th.endedAt === undefined ? 'reading' : 'late'
+      typed = { key: th.key, n: typeTo(typed.n, th.dropped + th.text.length, Math.min(250, now - typed.at), pace), at: now }
     }
     // A scrolled thought stays put until a new one starts or the person leaves it a while.
     if (thinkBrowse !== undefined && (th === null || thinkBrowse.key !== th.key || now - thinkBrowse.at > HOLD)) thinkBrowse = undefined

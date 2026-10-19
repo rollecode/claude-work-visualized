@@ -469,6 +469,7 @@ test('the typewriter keeps a reading pace and speeds up only when far behind', a
   expect(typeTo(0, 100, 1000)).toBe(35)
   expect(typeTo(0, 4000, 1000)).toBeGreaterThan(300)
   expect(typeTo(5, 5, 33)).toBe(5)
+  expect(typeTo(0, 300, 1000, 'late')).toBe(105)
 })
 
 test('thinking wraps, shows a share of the pane, scrolls, and fades a while after the turn', async () => {
@@ -498,6 +499,8 @@ test('thinking wraps, shows a share of the pane, scrolls, and fades a while afte
   expect(at(2000 + T.thoughtLinger - 1).length).toBe(1)
   expect(at(2000 + T.thoughtLinger + T.thoughtFade + 1)).toEqual([])
   expect(at(2000 + T.thoughtLinger + T.thoughtFade + 1).length).toBe(0)
+  const waiting = { ...done, waitingSince: 0 }
+  expect(text(thoughtView({ thought: waiting, typed: 0, now: 4200, turn: working, columns: 40, rows: 4 }).lines.flat())).toBe(' thinking… 4s')
   expect(thoughtView({ thought: withThought(null, 'k', '', 0), typed: 0, now: 100, turn: working, columns: 40, rows: 4 }).lines).toEqual([])
 })
 
@@ -587,4 +590,56 @@ test('the wheel over the thinking section scrolls back through the thought', asy
   expect(await shownBy(back)).toContain('First idea.')
   expect(await shownBy(back)).toContain('↓')
   await back.unmount()
+})
+
+test('a waiting line holds the place until the thinking text comes, and a step without thinking keeps the last thought', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', () => ({ value: [] }))
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('turn.step', async function* (_$, e) {
+    if (e.index === 0) {
+      await clock.sleep(3000)
+      yield { kind: 'thinking', index: 0, text: 'Late summary.' }
+    }
+    yield { kind: 'text', index: 1, text: 'Done.' }
+    return { turnId: 't1', index: e.index, answer: 'Done.', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  // The pane types only while it is drawn, so it stays mounted while the clock moves.
+  const shown = async (ms = 0) => {
+    const mount = () => $.ui.mount({
+      plugin: 'work-visualized',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'work-map',
+      props: { title: 'Claude Work', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    })
+    const ui = await mount()
+    await clock.advance(ms)
+    await ui.unmount()
+    const again = await mount()
+    const out = (await again.findAll({ type: 'Text' })).map(x => x.text).join('')
+    await again.unmount()
+    return out
+  }
+  const drain = async (s: ReturnType<typeof $.turn.step>) => {
+    for (let step = await s.next(); step.done !== true; step = await s.next()) {}
+  }
+
+  const first = $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 })
+  const done = drain(first)
+  expect(await shown(1500)).toContain('thinking… 1s')
+  await clock.advance(2000)
+  await done
+  expect(await shown(5000)).toContain('Late summary.')
+
+  await drain($.turn.step({ turnId: 't1', index: 1, model: 'm', messageCount: 2 }))
+  const after = await shown()
+  expect(after).toContain('Late summary.')
+  expect(after).not.toContain('thinking…')
 })
