@@ -500,7 +500,9 @@ test('thinking wraps, shows a share of the pane, scrolls, and fades a while afte
   expect(at(2000 + T.thoughtLinger + T.thoughtFade + 1)).toEqual([])
   expect(at(2000 + T.thoughtLinger + T.thoughtFade + 1).length).toBe(0)
   const waiting = { ...done, waitingSince: 0 }
-  expect(text(thoughtView({ thought: waiting, typed: 0, now: 4200, turn: working, columns: 40, rows: 4 }).lines.flat())).toBe(' thinking… 4s')
+  const held = thoughtView({ thought: waiting, typed: 0, now: 4200, turn: working, columns: 40, rows: 4 })
+  expect(text(held.lines.flat())).toBe(' • • • • •')
+  expect(held.waited).toBe(4)
   expect(thoughtView({ thought: withThought(null, 'k', '', 0), typed: 0, now: 100, turn: working, columns: 40, rows: 4 }).lines).toEqual([])
 })
 
@@ -592,7 +594,7 @@ test('the wheel over the thinking section scrolls back through the thought', asy
   await back.unmount()
 })
 
-test('a waiting line holds the place until the thinking text comes, and a step without thinking keeps the last thought', async ($, on) => {
+test('a wave of dots holds the place until the thinking text comes, and a step without thinking keeps the last thought', async ($, on) => {
   const clock = mock.clock(on, { now: 10_000 })
   mock.store(on)
   on('session.cwd', () => ({ value: ROOT }))
@@ -633,7 +635,7 @@ test('a waiting line holds the place until the thinking text comes, and a step w
 
   const first = $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 })
   const done = drain(first)
-  expect(await shown(1500)).toContain('thinking… 1s')
+  expect(await shown(1500)).toContain('thinking 1s')
   await clock.advance(2000)
   await done
   expect(await shown(5000)).toContain('Late summary.')
@@ -641,5 +643,5 @@ test('a waiting line holds the place until the thinking text comes, and a step w
   await drain($.turn.step({ turnId: 't1', index: 1, model: 'm', messageCount: 2 }))
   const after = await shown()
   expect(after).toContain('Late summary.')
-  expect(after).not.toContain('thinking…')
+  expect(after).not.toContain('• • •')
 })

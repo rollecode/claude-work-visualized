@@ -85,8 +85,8 @@ A deleted folder shows as a single fading row instead of one row per file inside
 - **Thinking:** while Claude thinks, a `── thinking ──` section under the prompt line types the
   thought out at a reading pace of 35 characters a second. It only speeds up once it is more than
   400 characters behind the stream, or to 3 times the pace once the thought has ended. Until the
-  first words arrive, from the moment a model request starts, the section shows a shimmering
-  `thinking… 4s` with the seconds counting up. A request that turns out not to think puts the last
+  first words arrive, from the moment a model request starts, the section shows a wave of dots
+  `• • • • •` and its rule counts the seconds, `── thinking 4s ──`. A request that turns out not to think puts the last
   thought back. Whitespace is collapsed, older lines are dimmer and the newest
   letters bright at a blinking `▏` cursor. The section is 30 % of the pane's height, 4 to 12 lines,
   and the rule shows `↑N` / `↓N` for lines out of view. The wheel over the section scrolls the

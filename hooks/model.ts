@@ -1034,7 +1034,15 @@ export type ThoughtScene = {
   /** The first line shown while the person scrolls; absent follows the typing. */
   top?: number
 }
-export type ThoughtView = { lines: Seg[][]; top: number; above: number; below: number; fade: number }
+export type ThoughtView = {
+  lines: Seg[][]
+  top: number
+  above: number
+  below: number
+  fade: number
+  /** Seconds waited so far while no words have come; the section's rule shows them. */
+  waited?: number
+}
 
 /** The thought typed up to `typed`, word-wrapped, `rows` lines of it, the cursor at its edge. */
 export function thoughtView(scene: ThoughtScene): ThoughtView {
@@ -1044,10 +1052,11 @@ export function thoughtView(scene: ThoughtScene): ThoughtView {
   if (thought === null) return none
   // Thinking text comes late, or never without `showThinkingSummaries`: this line holds its place.
   if (thought.waitingSince !== undefined) {
-    const word = 'thinking…'
-    const secs = `${Math.floor(Math.max(0, now - thought.waitingSince) / 1000)}s`
-    const shine = (i: number) => band(i, ((now / 70) % (word.length + 10)) - 5, 2.5)
-    return { ...none, fade: 0, lines: [[{ t: ' ' }, ...paint(word, i => ({ c: mix(MUTED, '#ffffff', 0.6 * shine(i)) })), { t: ` ${secs}`, c: FAINT }]] }
+    // A wave of dots rather than a word: the prompt line and the rule already say thinking.
+    const dots = '• • • • •'
+    const wave = (i: number) => band(i, ((now / 90) % (dots.length + 6)) - 3, 2.5)
+    const waited = Math.floor(Math.max(0, now - thought.waitingSince) / 1000)
+    return { ...none, fade: 0, waited, lines: [[{ t: ' ' }, ...paint(dots, i => ({ c: mix(FAINT, CLAUDE, wave(i)) }))]] }
   }
   if (thought.text === '' || fade >= 1) return none
   const total = thought.dropped + thought.text.length
