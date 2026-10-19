@@ -592,9 +592,13 @@ export const register: Register = on => {
       // Scrolled back down to the end: follow the typing again.
       if (thinkBrowse !== undefined && think.below === 0) thinkBrowse = undefined
       else if (thinkBrowse !== undefined) thinkBrowse = { ...thinkBrowse, top: think.top }
-      const thinkingRows = thinking.length > 0 ? thinking.length + 1 : 0
+      // The prompt line already says thinking while Claude thinks: the section then needs no title.
+      const saysThinking = focusOf(act) === undefined && info.phase === 'working'
+      const arrows = `${think.above > 0 ? ` ↑${think.above}` : ''}${think.below > 0 ? ` ↓${think.below}` : ''}`.trim()
+      const thinkLabel = saysThinking ? arrows : `thinking${think.waited !== undefined ? ` ${think.waited}s` : ''}${arrows === '' ? '' : ` ${arrows}`}`
+      const thinkRule = thinking.length > 0 && thinkLabel !== ''
+      const thinkingRows = thinking.length + (thinkRule ? 1 : 0)
       thinkArea = thinkingRows > 0 ? { column: 0, row: 2, columns, rows: thinkingRows } : undefined
-      const thinkLabel = `thinking${think.waited !== undefined ? ` ${think.waited}s` : ''}${think.above > 0 ? ` ↑${think.above}` : ''}${think.below > 0 ? ` ↓${think.below}` : ''}`
       const summary = summaryLines(info, now, columns - 4)
       const legend = legendLines(columns)
       const chrome = 3 + 1 + legend.length + 1 + (summary.length > 0 ? summary.length + 2 : 0) + thinkingRows + underRows
@@ -615,8 +619,8 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" width={columns} flexGrow={1}>
           {line(headerLine(now, focus !== undefined || info.phase === 'working', root, remoteOf(act, now)), 'h')}
-          {line(statusLine(act, info, now, fileCount, columns), 's')}
-          {thinking.length > 0 && rule(thinkLabel, 'r0', mix(CLAUDE, FAINT, think.fade))}
+          {line(statusLine(act, info, now, fileCount, columns, saysThinking ? think.waited : undefined), 's')}
+          {thinkRule && rule(thinkLabel, 'r0', mix(CLAUDE, FAINT, think.fade))}
           {thinking.map((segs, i) => line(segs, `th${i}`))}
           {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1')}
           {rows.length === 0 ? line([{ t: ' scanning…', c: MUTED }], 'empty') : visible.map(r => line(r.segs, r.key))}

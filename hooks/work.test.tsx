@@ -583,7 +583,7 @@ test('the wheel over the thinking section scrolls back through the thought', asy
   await clock.advance(30_000)
   await ui.unmount()
   const typed = await mount()
-  expect(await shownBy(typed)).toContain('thinking ↑')
+  expect(await shownBy(typed)).toContain('── ↑')
   expect(await shownBy(typed)).not.toContain('First idea.')
   await typed.unmount()
 
@@ -635,7 +635,9 @@ test('a wave of dots holds the place until the thinking text comes, and a step w
 
   const first = $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 })
   const done = drain(first)
-  expect(await shown(1500)).toContain('thinking 1s')
+  const waiting = await shown(1500)
+  expect(waiting).toContain('thinking 1s')
+  expect(waiting.split('thinking').length - 1).toBe(1)
   await clock.advance(2000)
   await done
   expect(await shown(5000)).toContain('Late summary.')

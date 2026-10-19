@@ -86,10 +86,12 @@ A deleted folder shows as a single fading row instead of one row per file inside
   thought out at a reading pace of 35 characters a second. It only speeds up once it is more than
   400 characters behind the stream, or to 3 times the pace once the thought has ended. Until the
   first words arrive, from the moment a model request starts, the section shows a wave of dots
-  `• • • • •` and its rule counts the seconds, `── thinking 4s ──`. A request that turns out not to think puts the last
+  `• • • • •` and the prompt line counts the seconds, `❯ thinking 4s █`. The word is shown once:
+  while the prompt line says thinking the section has no title (only `↑N` / `↓N` when scrolled),
+  and while Claude does something else the section is titled `── thinking ──`. A request that turns out not to think puts the last
   thought back. Whitespace is collapsed, older lines are dimmer and the newest
   letters bright at a blinking `▏` cursor. The section is 30 % of the pane's height, 4 to 12 lines,
-  and the rule shows `↑N` / `↓N` for lines out of view. The wheel over the section scrolls the
+  with `↑N` / `↓N` for lines out of view. The wheel over the section scrolls the
   thought; it stays where you left it for 20 s, or until you scroll back to the end. The thought
   stays for the whole turn and 20 s after it, then fades over 1.5 s. A new thinking block starts it
   over.
