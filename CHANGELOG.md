@@ -1,3 +1,10 @@
+### 0.5.0: 2026-10-19
+
+* Add thinking and git beside the tree
+* Add git action to the prompt line
+* Add /prs to hide pull requests
+* Add new demo GIF
+
 ### 0.4.0: 2026-10-19
 
 * Add live thinking typewriter to the pane
