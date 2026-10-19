@@ -724,10 +724,12 @@ export const register: Register = on => {
       const arrows = `${think.above > 0 ? ` ↑${think.above}` : ''}${think.below > 0 ? ` ↓${think.below}` : ''}`.trim()
       const label = place === 'stacked' && info.phase === 'working' ? arrows : `thinking${arrows === '' ? '' : ` ${arrows}`}`
       const hasRule = think.lines.length > 0
-      const used = think.lines.length + (hasRule ? 1 : 0)
+      // The rule, an empty row, then the thought: the text needs the air.
+      const used = think.lines.length + (hasRule ? 2 : 0)
       thinkArea = used > 0 ? { column: at.column, row: at.row, columns, rows: used } : undefined
       const els = [
         hasRule && rule(label, 'r0', columns, mix(CLAUDE, FAINT, think.fade)),
+        hasRule && line([], 'th-gap'),
         ...think.lines.map((segs, i) => line(segs, `th${i}`)),
       ]
       return { els, rows: used, waited: think.waited }
