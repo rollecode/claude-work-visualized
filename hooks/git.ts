@@ -305,22 +305,23 @@ export function headOf(rows: readonly GitRow[]): string {
 export function gitStarted(state: GitState | null, action: GitAction, now: number, dir: string): GitState {
   const fresh: GitState = { rows: [], dir, head: '', refs: [], fresh: [], at: now }
   const { endedAt: _ended, isFailed: _failed, ...base } = state === null || state.dir !== dir ? fresh : state
-  return { ...base, action, at: now, fresh: [] }
+  return { ...base, action, at: now }
 }
 
 export type GitRead = { rows: GitRow[]; ahead?: number; behind?: number }
 
 /** The graph read again, mid-command or after it; commits it didn't have are added to the fresh ones. */
-export function gitRead(state: GitState, read: GitRead): GitState {
+export function gitRead(state: GitState, read: GitRead, now: number): GitState {
   const had = new Set(state.rows.map(r => r.hash).filter(h => h !== undefined))
   const added = had.size === 0 ? [] : read.rows.map(r => r.hash).filter((h): h is string => h !== undefined && !had.has(h))
   const { ahead: _ahead, behind: _behind, ...rest } = state
   const counts = { ...(read.ahead === undefined ? {} : { ahead: read.ahead }), ...(read.behind === undefined ? {} : { behind: read.behind }) }
-  return { ...rest, ...counts, rows: read.rows, head: headOf(read.rows), fresh: [...state.fresh, ...added] }
+  const landed = added.length === 0 ? {} : { fresh: added, freshAt: now }
+  return { ...rest, ...counts, rows: read.rows, head: headOf(read.rows), ...landed }
 }
 
 export function gitEnded(state: GitState, read: GitRead | undefined, refs: string[], isFailed: boolean, now: number): GitState {
-  const base = read === undefined ? state : gitRead(state, read)
+  const base = read === undefined ? state : gitRead(state, read, now)
   return { ...base, refs, endedAt: now, isFailed }
 }
 
@@ -385,14 +386,15 @@ function graphSegs(row: GitRow, state: GitState, now: number, rowIndex: number):
   const since = state.endedAt === undefined ? 0 : now - state.endedAt
   const kind = state.action?.kind
   const isLit = (kind === 'merge' || kind === 'rebase' || kind === 'pr-merge') && state.endedAt !== undefined && since < LIT && rowIndex < 4
-  const isFresh = row.hash !== undefined && state.fresh.includes(row.hash) && since < POP + 1500
+  const landed = state.freshAt === undefined ? Infinity : now - state.freshAt
+  const isFresh = row.hash !== undefined && state.fresh.includes(row.hash) && landed < POP + 1500
   return [...row.graph].map((g): Seg => {
     if (g === '●' && row.isHead) {
       const running = state.endedAt === undefined
       return { t: '◉', c: running ? mix(CLAUDE, '#ffd2bf', pulse(now, 700) * 0.7) : CLAUDE, b: true }
     }
     if (g === '●' && isFresh) {
-      const p = smooth(since / POP)
+      const p = smooth(landed / POP)
       return { t: ['·', '∙', '•', '●'][Math.min(3, Math.floor(p * 4))] ?? '●', c: mix('#d2f8dc', COLOR.create, p), b: true }
     }
     if (g === '●') return { t: g, c: MUTED }
@@ -401,12 +403,14 @@ function graphSegs(row: GitRow, state: GitState, now: number, rowIndex: number):
   })
 }
 
-function refSegs(row: GitRow): Seg[] {
+/** A row's local branches, or its remote branches and tags: the subject goes between them. */
+function refSegs(row: GitRow, part: 'local' | 'remote'): Seg[] {
   const out: Seg[] = []
-  for (const r of row.refs ?? []) {
+  const isRemote = (r: string) => r.startsWith('#') || r.includes('/')
+  for (const r of (row.refs ?? []).filter(r => isRemote(r) === (part === 'remote'))) {
     const isHeadRef = row.isHead === true && r === row.refs?.[0]
     const c = r.startsWith('#') ? TAG : r.includes('/') ? MUTED : isHeadRef ? BASE : COLOR.view
-    out.push({ t: r, c, b: isHeadRef }, { t: ' ' })
+    out.push(part === 'remote' ? { t: ' ' } : { t: '' }, { t: r, c, b: isHeadRef }, part === 'local' ? { t: ' ' } : { t: '' })
   }
   return out
 }
@@ -451,14 +455,15 @@ export function gitView(state: GitState | null, now: number, columns: number, ro
   const card = prs === 'shown' ? prLines(state, now, width) : []
   const pending = pendingRow(state, now, width)
   const room = Math.max(1, rows - card.length - (pending === undefined ? 0 : 1))
-  const since = state.endedAt === undefined ? 0 : now - state.endedAt
   const lines = state.rows.slice(0, room).map((row, i) => {
     const lead: Seg[] = [{ t: ' ' }, ...graphSegs(row, state, now, i), { t: ' ' }]
     if (row.hash === undefined) return faded(fit(lead, width))
     // A commit that just landed keeps its subject green for a while.
-    const isFresh = state.fresh.includes(row.hash) && since < LABEL_FADE
-    const tone = isFresh ? mix(COLOR.create, MUTED, smooth(since / LABEL_FADE)) : row.isHead ? MUTED : mix(MUTED, FAINT, 0.3)
-    const text: Seg[] = [...refSegs(row), { t: row.subject ?? '', c: tone, b: isFresh && since < 2000 }]
+    const landed = state.freshAt === undefined ? Infinity : now - state.freshAt
+    const isFresh = state.fresh.includes(row.hash) && landed < LABEL_FADE
+    const tone = isFresh ? mix(COLOR.create, MUTED, smooth(landed / LABEL_FADE)) : row.isHead ? MUTED : mix(MUTED, FAINT, 0.3)
+    // The subject before remote branches and tags, so a long upstream name can't push it out.
+    const text: Seg[] = [...refSegs(row, 'local'), { t: row.subject ?? '', c: tone, b: isFresh && landed < 2000 }, ...refSegs(row, 'remote')]
     if (!row.isHead || pending !== undefined) return faded(fit([...lead, ...text], width))
     const label = actionLabel(state, now)
     const labelCells = label.reduce((n, s) => n + [...s.t].length, 0)

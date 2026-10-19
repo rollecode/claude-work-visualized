@@ -357,7 +357,8 @@ export const register: Register = on => {
         const gs = await read($, git)
         if (gs === null || gs.endedAt !== undefined) return
         const fresh = await readGit($, gs.dir, gs.refs)
-        if (fresh !== undefined) await update($, git, s => (s === null || s.endedAt !== undefined || s.dir !== gs.dir ? s : gitRead(s, fresh)))
+        const polledAt = await $.clock.now()
+        if (fresh !== undefined) await update($, git, s => (s === null || s.endedAt !== undefined || s.dir !== gs.dir ? s : gitRead(s, fresh, polledAt)))
       })().finally(() => {
         polling = false
       })

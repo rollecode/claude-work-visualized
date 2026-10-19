@@ -2,7 +2,8 @@
 //
 // The chat column is a mockup of Claude Code with verbose output off and the
 // edits kept to one line. The pane is drawn by the plugin's own code
-// (hooks/model.ts and hooks/code.ts), replaying real edits to a small project.
+// (hooks/model.ts, hooks/code.ts and hooks/git.ts): Claude thinks, branches,
+// reads and edits a small project, commits, pushes and opens a pull request.
 //
 //   node scripts/render-session.mjs          # needs Node 23.6+, Playwright, ffmpeg
 //   PLAYWRIGHT_PATH=/path/to/node_modules/playwright PLAYWRIGHT_CHANNEL=chrome node scripts/render-session.mjs
@@ -33,8 +34,9 @@ registerHooks({
 const { clipOf, codeLines, codeRule, currentClip } = await import('../hooks/code.ts')
 const {
   CLAUDE, COLOR, FAINT, ICON, MUTED,
-  buildRows, counted, emptyTurn, focusOf, headerLine, legendLines, mix, scrollTo, statusLine, summaryLines,
+  buildRows, counted, emptyTurn, focusOf, headerLine, legendLines, mix, scrollTo, statusLine, summaryLines, thoughtView, typeTo, withThought,
 } = await import('../hooks/model.ts')
+const { gitDoingOf, gitEnded, gitStarted, gitView, parseGraph } = await import('../hooks/git.ts')
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = join(ROOT, 'docs', 'media')
@@ -42,7 +44,7 @@ const FRAMES = join(OUT, '.session-frames')
 const FPS = 15
 const ROWS = 34
 const CHAT = 64 // columns of the chat
-const PANE = 104 // the pane's body columns; from 96 the code view sits beside the tree
+const PANE = 104 // the pane's body columns; from 84 thinking, git and the code view sit beside the tree
 const TREE = Math.max(30, Math.min(48, Math.floor(PANE * 0.4)))
 const CODE = PANE - TREE - 2
 const PANE_BG = '#000000'
@@ -120,8 +122,23 @@ export const initials = (name: string) =>
 
 const PROMPT = 'Add a 30s clock-skew margin to session expiry, a UserBadge component, and drop the legacy date helpers'
 
-/** One tool call: what the chat shows, and what the pane sees. */
-const STEPS = [
+const REPO = '/home/you/acme-dashboard'
+const BRANCH = 'feat/session-skew'
+const MESSAGE = 'Add clock-skew margin and UserBadge'
+// `git log --graph` as the plugin reads it, before and after each git command.
+const graph = rows => rows.map(([g, hash, deco, subject]) => `${g} \x1e${hash}\x1f${deco}\x1f${subject}`).join('\n')
+const BEFORE = graph([['*', '4e1b2c9', 'HEAD -> main, origin/main', 'List users on the dashboard'], ['*', '91d0a7e', '', 'Add the session hook'], ['*', '2c4f3a1', '', 'First commit']])
+const BRANCHED = BEFORE.replace('HEAD -> main, origin/main', `HEAD -> ${BRANCH}, origin/main, main`)
+const COMMITTED = graph([['*', '7c1e2a4', `HEAD -> ${BRANCH}`, MESSAGE]]) + '\n' + BRANCHED.replace(`HEAD -> ${BRANCH}, `, '')
+const PUSHED = COMMITTED.replace(`HEAD -> ${BRANCH}`, `HEAD -> ${BRANCH}, origin/${BRANCH}`)
+
+/** What Claude does, in order: thinking, and tool calls as the chat shows them and the pane sees them. */
+const SEQUENCE = [
+  {
+    think: "The expiry check compares Date.now() with expiresAt directly, so a client clock running a little fast logs people out early. I'll read the session and token code, add a 30 s margin, then build the badge on the existing initials helper.",
+    wait: 1200, run: 4200,
+  },
+  { tool: 'Bash', git: { kind: 'checkout', ref: BRANCH }, graph: BRANCHED, label: `git checkout -b ${BRANCH}`, run: 500, result: `Switched to a new branch '${BRANCH}'` },
   { tool: 'Read', op: 'view', path: 'src/auth/session.ts', run: 650, result: 'Read 24 lines' },
   { tool: 'Read', op: 'view', path: 'src/auth/token.ts', run: 550, result: 'Read 10 lines' },
   {
@@ -136,19 +153,30 @@ const STEPS = [
   { tool: 'Update', op: 'edit', path: 'src/components/index.ts', run: 600, before: INDEX, after: INDEX + "export { UserBadge } from './UserBadge'\n" },
   { tool: 'Update', op: 'edit', path: 'src/utils/format.ts', run: 600, before: FORMAT, after: FORMAT.replace("'./legacy-dates'", "'./date'") },
   { tool: 'Bash', op: 'delete', path: 'src/utils/legacy-dates.ts', run: 500, label: 'rm src/utils/legacy-dates.ts', result: '(No content)' },
+  { think: 'Everything builds on the branch. Commit it, push the branch and open a pull request against main.', wait: 900, run: 3000 },
+  { tool: 'Bash', git: { kind: 'commit', message: MESSAGE }, graph: COMMITTED, label: `git commit -am "${MESSAGE}"`, run: 1300, result: `[${BRANCH} 7c1e2a4] ${MESSAGE}` },
+  { tool: 'Bash', git: { kind: 'push', ref: 'origin' }, graph: PUSHED, label: `git push -u origin ${BRANCH}`, run: 1600, result: `branch '${BRANCH}' set up to track 'origin/${BRANCH}'.` },
+  { tool: 'Bash', git: { kind: 'pr' }, graph: PUSHED, pr: 42, label: 'gh pr create --base main --fill', run: 1800, result: 'https://github.com/acme/dashboard/pull/42' },
 ]
-const REPLY = 'Session expiry now allows 30s of clock skew, UserBadge is exported from the components, and the legacy date helpers are gone.'
+const STEPS = SEQUENCE.filter(s => s.tool !== undefined)
+const THINKS = SEQUENCE.filter(s => s.think !== undefined)
+const REPLY = 'Session expiry now allows 30s of clock skew, UserBadge is exported from the components, and the legacy date helpers are gone. Pull request #42 is open against main.'
 
 // The timeline, in ms: type the prompt, think, then each call, each edit replayed in full before the next.
 const TYPE_FROM = 700
 const TYPE_MS = 32
 const SUBMIT = TYPE_FROM + PROMPT.length * TYPE_MS + 500
-let cursor = SUBMIT + 1200
-for (const s of STEPS) {
+let cursor = SUBMIT + 300
+for (const s of SEQUENCE) {
   s.start = cursor
   s.end = cursor + s.run
+  if (s.think !== undefined) {
+    s.textAt = cursor + s.wait
+    cursor = s.end
+    continue
+  }
   s.clip = s.after === undefined ? undefined : clipOf(s.path, s.before, s.after, s.end)
-  cursor = s.end + (s.clip ? s.clip.dur + 900 : 450)
+  cursor = s.end + (s.clip ? s.clip.dur + 900 : s.git ? 1100 : 450)
 }
 const TURN_END = cursor + 700
 const DURATION = TURN_END + 6500
@@ -174,7 +202,7 @@ function stateAt(t) {
   const ghosts = {}
   let turn = t >= SUBMIT ? { ...emptyTurn(), phase: 'working', at: SUBMIT } : emptyTurn()
   for (const s of STEPS) {
-    if (t < s.start) continue
+    if (t < s.start || s.op === undefined) continue
     if (s.op === 'create' && !paths.includes(s.path)) paths.push(s.path)
     if (t < s.end) {
       activity[s.path] = { op: s.op, startedAt: s.start, running: 1 }
@@ -191,7 +219,36 @@ function stateAt(t) {
   }
   if (t >= TURN_END) turn = { ...turn, phase: 'complete', at: TURN_END }
   const clips = STEPS.filter(s => s.clip && s.end <= t).map(s => s.clip)
-  return { tree: treeFor(paths), activity, ghosts, turn, clip: currentClip(clips, t) }
+  return { tree: treeFor(paths), activity, ghosts, turn, clip: currentClip(clips, t), thought: thoughtAt(t), git: gitAt(t) }
+}
+
+/** The thought as the turn.step hook leaves it: dots while the words haven't come, then the text. */
+function thoughtAt(t) {
+  let thought = null
+  THINKS.forEach((s, i) => {
+    if (t < s.start) return
+    if (t < s.textAt) {
+      thought = { ...(thought ?? { key: '', text: '', dropped: 0, at: s.start, endedAt: s.start }), waitingSince: s.start }
+      return
+    }
+    thought = withThought(null, `t${i}`, s.think, s.textAt)
+    if (t >= s.end) thought = { ...thought, endedAt: s.end }
+  })
+  return thought
+}
+
+/** The git view as the tool.call hook leaves it after each git command. */
+function gitAt(t) {
+  let state = null
+  for (const s of STEPS) {
+    if (s.git === undefined || t < s.start) continue
+    if (state === null) state = gitEnded(gitStarted(null, s.git, 0, REPO), { rows: parseGraph(BEFORE) }, [], false, 0)
+    state = gitStarted(state, s.git, s.start, REPO)
+    if (t < s.end) continue
+    state = gitEnded(state, { rows: parseGraph(s.graph), ...(s.git.kind === 'push' || s.pr ? { ahead: 0, behind: 0 } : {}) }, s.git.kind === 'checkout' ? ['main'] : state.refs, false, s.end)
+    if (s.pr) state = { ...state, pr: { number: s.pr, head: BRANCH, base: 'main', state: 'open', at: s.end } }
+  }
+  return state
 }
 
 const smoothIn = t => {
@@ -205,12 +262,32 @@ const folders = new Map()
 let treeScroll = 0
 let codeScroll = 0
 
-/** The pane's rows, laid out as register.tsx does with the code view beside the tree. */
+let typed = { key: '', n: 0, at: 0 }
+
+/** The pane's rows, laid out as register.tsx does: thinking, git and the code view beside the tree. */
 function paneAt(t) {
   const s = stateAt(t)
   const height = ROWS - 1
-  const rule = (label, columns) => [{ t: '── ', c: FAINT }, { t: label, c: FAINT, b: true }, { t: ' ' + '─'.repeat(Math.max(0, columns - label.length - 4)), c: FAINT }]
-  const split = s.clip !== undefined
+  const rule = (label, columns, c = FAINT) =>
+    label === ''
+      ? [{ t: '─'.repeat(columns), c: FAINT }]
+      : [{ t: '── ', c: FAINT }, { t: label, c, b: true }, { t: ' ' + '─'.repeat(Math.max(0, columns - label.length - 4)), c: FAINT }]
+  const th = s.thought
+  if (th !== null) {
+    if (th.key !== typed.key) typed = { key: th.key, n: 0, at: t }
+    typed = { key: th.key, n: typeTo(typed.n, th.text.length, Math.min(250, t - typed.at), th.endedAt === undefined ? 'reading' : 'late'), at: t }
+  }
+  const doing = gitDoingOf(s.git)
+  const saysThinking = focusOf(s.activity) === undefined && doing === undefined && s.turn.phase === 'working'
+  const side = []
+  const think = thoughtView({ thought: th, typed: typed.n, now: t, turn: s.turn, columns: CODE, rows: Math.floor(height * (s.clip ? 0.25 : 0.45)) })
+  if (think.lines.length > 0) {
+    const arrows = think.above > 0 ? `↑${think.above}` : ''
+    side.push(rule(saysThinking ? arrows : 'thinking', CODE, mix(CLAUDE, FAINT, think.fade)), ...think.lines)
+  }
+  const gv = gitView(s.git, t, CODE, Math.max(4, Math.floor(height * (s.clip ? 0.25 : 0.45))), REPO)
+  if (gv.lines.length > 0) side.push(rule(gv.label, CODE, mix(CLAUDE, FAINT, gv.fade)), ...gv.lines)
+  const split = s.clip !== undefined || side.length > 0
   const treeColumns = split ? TREE : PANE
 
   const rows = buildRows({ tree: s.tree, activity: s.activity, ghosts: s.ghosts, now: t, columns: treeColumns, folders })
@@ -225,7 +302,7 @@ function paneAt(t) {
 
   const left = [
     headerLine(t, isWorking, 'acme-dashboard'),
-    statusLine(s.activity, s.turn, t, s.tree.filter(e => !e.d).length, treeColumns),
+    statusLine(s.activity, s.turn, t, s.tree.filter(e => !e.d).length, treeColumns, { waited: saysThinking ? think.waited : undefined, git: doing }),
     rule(treeScroll > 0 ? `tree ↑${treeScroll}` : 'tree', treeColumns),
     ...visible.map(r => r.segs),
   ]
@@ -242,10 +319,12 @@ function paneAt(t) {
   left.push(rule('legend', treeColumns), ...legend)
 
   if (!split) return left.map(l => pad(l, PANE, PANE_BG))
-  const replay = codeLines(s.clip, t, CODE, height - 1, codeScroll)
-  codeScroll = replay.scroll
-  const right = [codeRule(s.clip, CODE), ...replay.lines]
-  return left.map((l, i) => [...pad(l, TREE, PANE_BG), { t: '  ' }, ...pad(right[i] ?? [], CODE, PANE_BG)])
+  if (s.clip !== undefined) {
+    const replay = codeLines(s.clip, t, CODE, Math.max(3, height - 1 - side.length), codeScroll)
+    codeScroll = replay.scroll
+    side.push(codeRule(s.clip, CODE), ...replay.lines)
+  }
+  return left.map((l, i) => [...pad(l, TREE, PANE_BG), { t: '  ' }, ...pad(side[i] ?? [], CODE, PANE_BG)])
 }
 
 // ---------------------------------------------------------------- the chat, a mockup of Claude Code

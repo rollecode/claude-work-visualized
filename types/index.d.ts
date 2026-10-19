@@ -93,6 +93,8 @@ export type GitState = {
   refs: string[]
   /** Commits that weren't in the graph before the last command: they pop in. */
   fresh: string[]
+  /** When the fresh commits landed. */
+  freshAt?: number
   action?: GitAction
   /** When the last command started, ended, and whether it failed. */
   at: number

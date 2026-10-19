@@ -8,7 +8,7 @@
 A Claude Code plugin that adds a live, animated map of your project next to the chat. Every file Claude reads, edits, creates or deletes lights up in the tree as it happens, and every edit is replayed as keystrokes in a code view beside it.
 
 <p align="center">
-  <img src="docs/media/session.gif" alt="Claude Code with verbose output off on the left, and the work pane on the right: the tree lights up as Claude reads two files, edits one, creates a component, edits two more and deletes a file, while the code view types each change in" width="100%">
+  <img src="docs/media/session.gif" alt="Claude Code on the left and the work pane on the right: Claude's thinking types itself out, a branch is checked out on the git graph, the tree lights up as Claude reads, edits, creates and deletes files while the code view types each change in, then the commit lands green on the graph, the branch is pushed and a pull request card opens" width="100%">
 </p>
 
 This is Rolle's fork of [GrzeskoByte/claude-work-visualized](https://github.com/GrzeskoByte/claude-work-visualized). It adds the code view, syntax highlighting, one-line edit results in the chat, remote work over `ssh`, `scp` and `rsync`, and replays of files changed by shell commands. See the [changelog](CHANGELOG.md).
