@@ -128,7 +128,7 @@ window eases toward the caret a quarter of the way each frame.
 The bundle is built from Prism's own minified files with `_self` set to an empty object: in the
 hooks' worker Prism would otherwise answer the engine's messages.
 
-From 96 columns the code view sits beside the tree; narrower, it goes under the tree.
+From 84 columns thinking, the git graph and the code view sit beside the tree, stacked in that order; narrower, thinking and git go above the tree and the code view under it.
 
 A clip also keeps the whole file after the edit (`file`) and the lines it changed (`changed`). A
 `ui.scroll` hook takes the person's wheel, touchpad and scroll keys over the code view:
