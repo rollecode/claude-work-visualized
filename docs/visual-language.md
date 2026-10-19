@@ -109,9 +109,9 @@ stays a minute after the last git command, then fades over 1.5 s.
   thought out at a reading pace of 35 characters a second. It only speeds up once it is more than
   400 characters behind the stream, or to 3 times the pace once the thought has ended. Until the
   first words arrive, from the moment a model request starts, the section shows a wave of dots
-  `• • • • •` and the prompt line counts the seconds, `❯ thinking 4s █`. The word is shown once:
-  while the prompt line says thinking the section has no title (only `↑N` / `↓N` when scrolled),
-  and while Claude does something else the section is titled `── thinking ──`. A request that turns out not to think puts the last
+  `• • • • •` and the prompt line counts the seconds, `❯ thinking 4s █`. The section's title never changes with the prompt line, so it
+  doesn't blink: beside the tree it is always `── thinking ──`; right under the prompt line, which says
+  thinking while Claude works, it is a plain rule until the turn ends (only `↑N` / `↓N` when scrolled). A request that turns out not to think puts the last
   thought back. Whitespace is collapsed, older lines are dimmer and the newest
   letters bright at a blinking `▏` cursor. The section is 30 % of the pane's height, 4 to 12 lines,
   with `↑N` / `↓N` for lines out of view. The wheel over the section scrolls the

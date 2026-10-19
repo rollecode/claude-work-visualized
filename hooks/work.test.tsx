@@ -759,6 +759,7 @@ test('a wave of dots holds the place until the thinking text comes, and a step w
     return { turnId: 't1', index: e.index, answer: 'Done.', toolUses: [], stopReason: 'end_turn', usage: null } as never
   })
   await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await $.turn.start({ turnId: 't1', source: 'prompt' } as never).catch(() => undefined)
   // The pane types only while it is drawn, so it stays mounted while the clock moves.
   const shown = async (ms = 0) => {
     const mount = () => $.ui.mount({
@@ -884,4 +885,53 @@ test('a tool call still being written shows on the prompt line', async ($, on) =
   await ui.unmount()
   finish()
   await draining
+})
+
+test('the thinking title stays put while calls come and go', async ($, on) => {
+  mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', () => ({ value: [] }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 1, isLink: false } }) as never)
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('turn.step', async function* () {
+    yield { kind: 'thinking', index: 0, text: 'Plan the change.' }
+    yield { kind: 'tool', index: 1, id: 'r', name: 'Read' }
+    return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: null } as never
+  })
+  let release = () => {}
+  let reached = () => {}
+  const arrived = new Promise<void>(r => (reached = r))
+  on('tool.call', { tool: 'Read' }, () =>
+    new Promise(resolve => {
+      reached()
+      release = () => resolve({ result: { type: 'text', file: { filePath: '/proj/a.ts', content: '', numLines: 0, startLine: 1, totalLines: 0 } } } as never)
+    }),
+  )
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await $.turn.start({ turnId: 't1', source: 'prompt' } as never).catch(() => undefined)
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 })
+  for (let step = await stream.next(); step.done !== true; step = await stream.next()) {}
+  const titles = async () => {
+    const ui = await $.ui.mount({
+      plugin: 'work-visualized',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'work-map',
+      props: { title: 'Claude Work', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    })
+    const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+    await ui.unmount()
+    return shown.includes('── thinking')
+  }
+  expect(await titles()).toBe(true)
+  const reading = $.tool.call({ tool: 'Read', file_path: '/proj/a.ts' } as never)
+  await arrived
+  expect(await titles()).toBe(true)
+  release()
+  await reading
+  expect(await titles()).toBe(true)
 })

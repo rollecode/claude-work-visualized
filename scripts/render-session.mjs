@@ -283,7 +283,7 @@ function paneAt(t) {
   const think = thoughtView({ thought: th, typed: typed.n, now: t, turn: s.turn, columns: CODE, rows: Math.floor(height * (s.clip ? 0.25 : 0.45)) })
   if (think.lines.length > 0) {
     const arrows = think.above > 0 ? `↑${think.above}` : ''
-    side.push(rule(saysThinking ? arrows : 'thinking', CODE, mix(CLAUDE, FAINT, think.fade)), ...think.lines)
+    side.push(rule(arrows === '' ? 'thinking' : `thinking ${arrows}`, CODE, mix(CLAUDE, FAINT, think.fade)), ...think.lines)
   }
   const gv = gitView(s.git, t, CODE, Math.max(4, Math.floor(height * (s.clip ? 0.25 : 0.45))), REPO)
   if (gv.lines.length > 0) side.push(rule(gv.label, CODE, mix(CLAUDE, FAINT, gv.fade)), ...gv.lines)

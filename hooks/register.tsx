@@ -710,15 +710,19 @@ export const register: Register = on => {
     // The prompt line already says thinking while Claude thinks: the section then needs no title.
     const saysThinking = heldFocusOf(act, now) === undefined && info.doing === undefined && gitDoingOf(gs, now) === undefined && writing === undefined && info.phase === 'working'
 
-    /** The thinking section at `at` in the pane: its rule, plain while the prompt line says thinking, and its lines. */
-    function thinkingSection(columns: number, rows: number, at: { column: number; row: number }) {
+    /**
+     * The thinking section at `at` in the pane: its rule and lines. Its title doesn't follow the prompt line from call to
+     * call, so it doesn't blink: beside the tree it always says thinking; right under the prompt line, which says it
+     * while Claude works, it says it only once the turn is over.
+     */
+    function thinkingSection(columns: number, rows: number, at: { column: number; row: number }, place: 'beside' | 'stacked') {
       const think = thoughtView({ thought: th, typed: typed.n, now, turn: info, columns, rows, top: thinkBrowse?.top })
       thinkTop = think.top
       // Scrolled back down to the end: follow the typing again.
       if (thinkBrowse !== undefined && think.below === 0) thinkBrowse = undefined
       else if (thinkBrowse !== undefined) thinkBrowse = { ...thinkBrowse, top: think.top }
       const arrows = `${think.above > 0 ? ` ↑${think.above}` : ''}${think.below > 0 ? ` ↓${think.below}` : ''}`.trim()
-      const label = saysThinking ? arrows : `thinking${think.waited !== undefined ? ` ${think.waited}s` : ''}${arrows === '' ? '' : ` ${arrows}`}`
+      const label = place === 'stacked' && info.phase === 'working' ? arrows : `thinking${arrows === '' ? '' : ` ${arrows}`}`
       const hasRule = think.lines.length > 0
       const used = think.lines.length + (hasRule ? 1 : 0)
       thinkArea = used > 0 ? { column: at.column, row: at.row, columns, rows: used } : undefined
@@ -768,7 +772,7 @@ export const register: Register = on => {
       const sideColumns = paneColumns - treeColumns - 2
       // Thinking takes the whole column when it is alone, half of it next to an edit or git.
       const isShared = clip !== undefined || hasGit
-      const thinking = thinkingSection(sideColumns, Math.max(3, (isShared ? Math.floor(height / 2) : height) - 1), { column: treeColumns + 2, row: 0 })
+      const thinking = thinkingSection(sideColumns, Math.max(3, (isShared ? Math.floor(height / 2) : height) - 1), { column: treeColumns + 2, row: 0 }, 'beside')
       const gitPart = gitSection(sideColumns, Math.max(4, clip === undefined ? height - 1 - thinking.rows : Math.floor(height * 0.25)))
       const codeRows = Math.max(3, height - 1 - thinking.rows - gitPart.rows)
       codeArea = clip === undefined ? undefined : { column: treeColumns + 2, row: thinking.rows + gitPart.rows, columns: sideColumns, rows: codeRows + 1 }
@@ -785,7 +789,7 @@ export const register: Register = on => {
       )
     }
 
-    const thinking = thinkingSection(paneColumns, thoughtRows(height), { column: 0, row: 2 })
+    const thinking = thinkingSection(paneColumns, thoughtRows(height), { column: 0, row: 2 }, 'stacked')
     const gitPart = gitSection(paneColumns, gitRows(height))
     const codeRows = clip === undefined ? 0 : Math.max(3, Math.min(Math.max(clip.before.length, clip.after.length) + 2, Math.floor(height * 0.45)))
     codeArea = clip === undefined ? undefined : { column: 0, row: 0, columns: paneColumns, rows: codeRows + 1 }
