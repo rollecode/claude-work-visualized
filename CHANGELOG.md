@@ -1,3 +1,8 @@
+### 0.5.1: 2026-10-19
+
+* Fix thinking flashing between tool calls
+* Add tool calls being written to the prompt line
+
 ### 0.5.0: 2026-10-19
 
 * Add thinking and git beside the tree
