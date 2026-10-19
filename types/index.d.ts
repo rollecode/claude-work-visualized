@@ -59,6 +59,34 @@ export type Thought = {
   waitingSince?: number
 }
 
+export type GitKind = 'checkout' | 'branch' | 'commit' | 'merge' | 'rebase' | 'push' | 'pull' | 'fetch' | 'reset' | 'pr' | 'pr-merge'
+
+/** One git or gh command Claude ran, as the git view shows it. */
+export type GitAction = { kind: GitKind; ref?: string }
+
+/** One row of `git log --graph`: the graph cells, and the commit on it if any. */
+export type GitRow = { graph: string; hash?: string; refs?: string[]; subject?: string; isHead?: boolean }
+
+/** The git view: the graph read after Claude's last git command, and what that command did. */
+export type GitState = {
+  rows: GitRow[]
+  /** The checked-out branch, or the short hash when detached. */
+  head: string
+  /** Commits ahead of and behind the upstream branch, when there is one. */
+  ahead?: number
+  behind?: number
+  /** Branches beside HEAD worth drawing: the last ones a command named. */
+  refs: string[]
+  /** Commits that weren't in the graph before the last command: they pop in. */
+  fresh: string[]
+  action?: GitAction
+  /** When the last command started, ended, and whether it failed. */
+  at: number
+  endedAt?: number
+  isFailed?: boolean
+  pr?: { number: number; head: string; base?: string; state: 'open' | 'merged'; at: number }
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'work-visualized': {
@@ -68,6 +96,7 @@ declare module 'claude-code' {
       turn: TurnInfo
       watching: boolean
       clips: Clip[]
+      git: GitState | null
       thought: Thought | null
     }
   }

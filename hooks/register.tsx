@@ -1,11 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { Activity, Clip, Ghost, Op, Thought, TreeEntry, TurnInfo } from '../types'
+import type { Activity, Clip, Ghost, GitAction, GitState, Op, Thought, TreeEntry, TurnInfo } from '../types'
 import {
   HOLD, MAX_BYTES, WHEEL_LINES, browseAfter, clipKey, clipOf, codeLines, codeRule, currentClip, enqueue, fileLines, isClipDone, isOverCode, patchStats,
 } from './code'
 import type { Browse, CodeArea } from './code'
+import { AHEAD_ARGV, gitActionsOf, gitEnded, gitFade, gitStarted, gitView, graphArgv, parseGraph, prBaseOf, prNumberOf, refsAfter } from './git'
+import type { GitRead } from './git'
 import {
   CLAUDE, COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
   buildRows, classifyBash, counted, mentionsOf, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
@@ -32,6 +34,7 @@ const turn = atom({ plugin: 'work-visualized', key: 'turn' } as const, emptyTurn
 const watching = atom({ plugin: 'work-visualized', key: 'watching' } as const, true)
 const clips = atom({ plugin: 'work-visualized', key: 'clips' } as const, [] as Clip[])
 const thought = atom({ plugin: 'work-visualized', key: 'thought' } as const, null as Thought | null)
+const git = atom({ plugin: 'work-visualized', key: 'git' } as const, null as GitState | null)
 
 // Drawing memory only: a reload starts these over, harmlessly.
 const folders: FolderMemory = new Map()
@@ -261,7 +264,8 @@ export const register: Register = on => {
         const c = await read($, clips)
         const isKept = (x: Clip) => !isClipDone(x, t) || isBrowsed(x, t)
         if (c.some(x => !isKept(x))) await update($, clips, list => list.filter(isKept))
-        if (!isAnimating(a, g, await read($, turn), t, await read($, thought)) && t > animateUntil - T.trail) animateUntil = Math.min(animateUntil, t + 1500)
+        const isGitShown = gitFade(await read($, git), t) < 1
+        if (!isAnimating(a, g, await read($, turn), t, await read($, thought)) && !isGitShown && t > animateUntil - T.trail) animateUntil = Math.min(animateUntil, t + 1500)
       })()
     })
 
@@ -490,6 +494,36 @@ export const register: Register = on => {
   })
 
   // The wheel, a touchpad or the scroll keys over the code view move through the edited file.
+  // Git and gh commands: the branch graph is read again after each, and the command animates on it.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const command = String((e as { command?: unknown }).command ?? '')
+    const actions = gitActionsOf(command)
+    const action = actions[actions.length - 1]
+    if (action === undefined || !isWatching) return next(e)
+    const cwd = await $.session.cwd()
+    if ((await read($, git)) === null) {
+      const first = await readGit($, cwd, [])
+      if (first !== undefined) await update($, git, () => gitEnded(gitStarted(null, action, 0), first, [], false, 0))
+    }
+    const startedAt = await $.clock.now()
+    const before = await read($, git)
+    await update($, git, s => gitStarted(s, action, startedAt))
+    startAnimating(startedAt)
+
+    const ran = await next(e)
+    const isFailed = ran.deny !== undefined || ran.isError === true
+    const stdout = String((ran.result as { stdout?: unknown } | undefined)?.stdout ?? '')
+    const refs = refsAfter(before?.refs ?? [], action, before?.head ?? '')
+    const fresh = await readGit($, cwd, refs)
+    const now = await $.clock.now()
+    await update($, git, s => {
+      const ended = gitEnded(s ?? gitStarted(null, action, now), fresh, refs, isFailed, now)
+      return isFailed ? ended : withPr(ended, actions, command, stdout, now)
+    })
+    startAnimating(now)
+    return ran
+  })
+
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     const th = await read($, thought)
     if (th !== null && thinkArea !== undefined && e.pointer !== undefined && isOverCode(e.pointer, thinkArea)) {
@@ -513,6 +547,7 @@ export const register: Register = on => {
     const gh = await read($, ghosts)
     const info = await read($, turn)
     const th = await read($, thought)
+    const gs = await read($, git)
     if (th !== null) {
       if (th.key !== typed.key) typed = { key: th.key, n: th.dropped, at: now }
       const pace = th.endedAt === undefined ? 'reading' : 'late'
@@ -601,7 +636,9 @@ export const register: Register = on => {
       thinkArea = thinkingRows > 0 ? { column: 0, row: 2, columns, rows: thinkingRows } : undefined
       const summary = summaryLines(info, now, columns - 4)
       const legend = legendLines(columns)
-      const chrome = 3 + 1 + legend.length + 1 + (summary.length > 0 ? summary.length + 2 : 0) + thinkingRows + underRows
+      const gv = gitView(gs, now, columns, gitRows(height))
+      const gitLines = gv.lines.length > 0 ? gv.lines.length + 1 : 0
+      const chrome = 3 + 1 + legend.length + 1 + (summary.length > 0 ? summary.length + 2 : 0) + thinkingRows + gitLines + underRows
       const room = Math.max(3, height - chrome)
       const focus = focusOf(act)
       scroll = scrollTo(scroll, rows, focus, room)
@@ -611,7 +648,7 @@ export const register: Register = on => {
       const fileCount = entries.filter(t => !t.d).length
       // Under the tree, the code view starts below the header, the tree and the card.
       if (under !== undefined && codeArea !== undefined) {
-        codeArea = { ...codeArea, row: 3 + thinkingRows + visible.length + (below > 0 ? 1 : 0) + (summary.length > 0 ? summary.length + 2 : 0) }
+        codeArea = { ...codeArea, row: 3 + thinkingRows + gitLines + visible.length + (below > 0 ? 1 : 0) + (summary.length > 0 ? summary.length + 2 : 0) }
       }
       const age = now - info.at
       const card = Math.min(smoothIn(age / 500), info.phase === 'complete' && age > T.summary - 1500 ? Math.max(0, (T.summary - age) / 1500) : 1)
@@ -622,6 +659,8 @@ export const register: Register = on => {
           {line(statusLine(act, info, now, fileCount, columns, saysThinking ? think.waited : undefined), 's')}
           {thinkRule && rule(thinkLabel, 'r0', mix(CLAUDE, FAINT, think.fade))}
           {thinking.map((segs, i) => line(segs, `th${i}`))}
+          {gitLines > 0 && rule(gv.label, 'rg', mix(CLAUDE, FAINT, gv.fade))}
+          {gv.lines.map((segs, i) => line(segs, `git${i}`))}
           {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1')}
           {rows.length === 0 ? line([{ t: ' scanning…', c: MUTED }], 'empty') : visible.map(r => line(r.segs, r.key))}
           {below > 0 && line([{ t: `   ↓ ${below} more`, c: FAINT }], 'down')}
@@ -659,4 +698,34 @@ function merge(segs: readonly Seg[]): Seg[] {
     } else out.push(s)
   }
   return out
+}
+
+/** Rows the git view gets: a share of the pane's height, within limits. */
+const gitRows = (height: number) => Math.max(4, Math.min(12, Math.floor(height * 0.3)))
+
+/** Reads the branch graph and how far HEAD is from its upstream; undefined outside a repository. */
+async function readGit($: EngineInterface, cwd: string, refs: readonly string[]): Promise<GitRead | undefined> {
+  const run = (argv: readonly string[]) => $.process.run(argv, { cwd, timeoutMs: 5000 }).catch(() => undefined)
+  let log = await run(graphArgv(refs))
+  // A branch named earlier may be gone: draw HEAD alone then.
+  if (log?.exitCode !== 0 && refs.length > 0) log = await run(graphArgv([]))
+  if (log === undefined || log.exitCode !== 0) return undefined
+  const counts = await run(AHEAD_ARGV)
+  const [ahead, behind] = counts?.exitCode === 0 ? counts.stdout.trim().split(/\s+/).map(Number) : []
+  return { rows: parseGraph(log.stdout), ahead, behind }
+}
+
+/** Opens or merges the PR card when a `gh pr` command printed a PR's URL. */
+function withPr(state: GitState, actions: readonly GitAction[], command: string, stdout: string, now: number): GitState {
+  const n = prNumberOf(stdout)
+  if (actions.some(a => a.kind === 'pr') && n !== undefined) {
+    const base = prBaseOf(command)
+    return { ...state, pr: { number: n, head: state.head, ...(base === undefined ? {} : { base }), state: 'open', at: now } }
+  }
+  const merged = actions.find(a => a.kind === 'pr-merge')
+  if (merged === undefined) return state
+  const number = merged.ref !== undefined ? Number(merged.ref) : n ?? state.pr?.number
+  if (number === undefined) return state
+  const head = state.pr?.number === number ? state.pr.head : state.head
+  return { ...state, pr: { number, head, ...(state.pr?.base === undefined ? {} : { base: state.pr.base }), state: 'merged', at: now } }
 }
