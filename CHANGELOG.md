@@ -1,6 +1,7 @@
-### 0.2.2: 2026-10-19
+### 0.3.0: 2026-10-19
 
 * Add live thinking typewriter to the pane
+* Add live branch graph for git work
 
 ### 0.2.1: 2026-10-17
 

@@ -23,6 +23,7 @@ This is Rolle's fork of [GrzeskoByte/claude-work-visualized](https://github.com/
 - **Quiet chat.** While the pane is shown, an edit's result in the chat is one line (`± Edited src/app.ts +3 -1`), because the pane already shows the diff.
 - **Remote work.** Files touched over `ssh`, `scp` and `rsync` show under a folder per host (`deploy@web1:/etc/nginx/…`), and the header names the host Claude is working on.
 - **Live thinking.** Claude's thinking types itself out under the prompt line at a pace you can read (a wave of dots and a seconds count hold its place until the words arrive), with a blinking cursor, in up to 12 lines. Scroll over it to read back. It stays until 20 seconds after the turn ends. Needs `"showThinkingSummaries": true` in `~/.claude/settings.json`: without it Claude Code receives thinking with no text.
+- **Git graph.** When Claude runs `git` or `gh`, a small branch graph appears under the prompt line: checkouts move the `◉` HEAD marker, new commits pop in, merges light up the joining lines, pushes and pulls count commits ahead and behind, and `gh pr create` / `gh pr merge` open a PR card. It stays for a minute after the last git command.
 - **Completion card.** When a turn ends, a card counts the files viewed, edited, created and deleted.
 - **Terminal friendly.** One-cell glyphs and box-drawing characters only, up to 30 fps while something moves, idle otherwise.
 

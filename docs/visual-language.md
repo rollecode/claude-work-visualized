@@ -73,6 +73,29 @@ A deleted folder shows as a single fading row instead of one row per file inside
   activity.
 - A closed folder shows how many children it has, e.g. `+3`.
 
+## Git graph
+
+When Claude runs a `git` or `gh` command that moves branches or commits, a `── git <branch> ──`
+section opens under the thinking section with the branch graph from `git log --graph`: HEAD, plus
+up to 3 branches the last commands named, 8 commits at most, 30 % of the pane's height (4 to 12
+rows). The rule also says how far HEAD is from its upstream, e.g. `git main 2 ahead`.
+
+| Action | Glyph | Colour | On the graph |
+| --- | --- | --- | --- |
+| checkout, switch | `→` | blue | the `◉` HEAD marker moves to the branch |
+| branch | `+` | green | the branch appears beside HEAD |
+| commit, cherry-pick, revert | `+` | green | the new commit's dot grows `· ∙ • ●` over 0.7 s |
+| merge, `gh pr merge` | `◆` | purple | the graph's lines near HEAD pulse for 3 s |
+| rebase | `◆` | orange | the same |
+| push | `↑` | orange | ahead and behind are counted again |
+| pull, fetch | `↓` | blue | the same |
+| reset | `←` | red | HEAD moves |
+| `gh pr create` | `#` | green | a rounded PR card under the graph: `#4 open`, `head → base` |
+
+While the command runs, the HEAD row ends in `◂` and the action's name shimmers; afterwards the
+label stays and fades to muted over 20 s, or shows `✗` in red if the command failed. The section
+stays a minute after the last git command, then fades over 1.5 s.
+
 ## Chrome
 
 - **Header:** `✶ work-map ~/project`. The spark turns through `· ∙ • ◆ ✶` while Claude works.

@@ -11,6 +11,7 @@ values.
  every 33 ms ──► $.ui.invalidate('ui.render') ──► buildRows(scene at now) ──► Pane
  turn.start / turn.complete ──► turn (phase + counts) ──► completion card
  turn.step (thinking chunks) ──► thought (text so far) ──► typewriter in the pane
+ tool.call Bash (git, gh) ──► git log --graph ──► git (graph + action) ──► branch graph
 ```
 
 ## State
@@ -24,6 +25,7 @@ hot reload:
 | `activity` | Per path: `{ op, startedAt, endedAt?, running }`, i.e. the last operation and how many tool calls are still running on it |
 | `ghosts` | Deleted paths kept on screen while their exit animation plays |
 | `turn` | `idle`, `working` or `complete`, plus the paths counted per operation this turn |
+| `git` | The branch graph read after the last git command, the action and when it ran, new commits, the PR card |
 | `thought` | The latest thinking block: its text with whitespace collapsed (the last 4,000 characters), when its last piece arrived, and when it ended |
 | `watching` | Whether `/watch` is on (also kept in `$.store`, so it lasts across sessions) |
 | `clips` | Edits queued or shown in the code view: a window of the file before and after |
@@ -138,6 +140,24 @@ The pane does the typing: each frame, `typeTo()` moves the typewriter on from wh
 left it, and `thoughtView()` word-wraps what's typed so far and shows the last `thoughtRows()` lines.
 The `ui.scroll` hook takes a wheel over the section before the code view does and moves the first
 line shown, until a new thought, 20 s without scrolling, or a scroll back to the end.
+
+## Git graph
+
+`hooks/git.ts` holds the logic; a second `tool.call` hook on `Bash` in `hooks/register.tsx` drives it.
+
+1. `gitActionsOf()` reads the command for `git` checkout, switch, branch, commit, cherry-pick,
+   revert, merge, rebase, push, pull, fetch and reset, and `gh pr create` / `gh pr merge`. Read-only
+   commands (`status`, `log`, `diff`) don't open the view.
+2. Before the command runs, the action is stored as running in `git`. The first time, the graph is
+   read first, so a new commit has something to pop out of.
+3. After it, `$.process.run` reads `git log --graph` for HEAD and the branches `refsAfter()` keeps
+   (where a checkout came from, what a merge or rebase named), and `git rev-list --left-right
+   --count HEAD...@{upstream}` for ahead and behind. `parseGraph()` turns the graph into one-cell
+   glyphs; commits that weren't there before are marked fresh.
+4. A `gh pr` command's output gives the PR number for the card.
+
+`gitView()` draws the rows, the label on the HEAD row and the card for the current instant. Git
+runs in the session's folder, so `cd elsewhere && git …` reads the session's repository.
 
 ## Scanning and diffing
 
