@@ -55,20 +55,28 @@ Losing it on a reload is harmless.
 ### Reading shell commands
 
 `classifyBash()` splits a command on `&&`, `||`, `;`, `|` and new lines, handles redirections
-(`> file` is an edit, `< file` a view), drops leading `VAR=` assignments and `sudo`, and
-recognises:
+(`> file` is an edit, `< file` a view), drops leading `VAR=` assignments, `sudo`, `env`,
+`nohup` and `timeout N`, reads `bash -c '…'` as a command, and recognises:
 
 | Commands | Operation |
 | --- | --- |
 | `rm`, `unlink`, `rmdir`, `trash`, `shred`, `git rm` | delete |
 | `touch`, `mkdir` | create |
 | `mv a b`, `git mv a b` | delete `a`, create `b` |
-| `cp a b` | view `a`, create `b` |
-| `sed -i`, `perl -i`, `tee` | edit |
-| `cat`, `head`, `tail`, `less`, `grep`, `rg`, `jq`, `awk`, `wc`, `diff`, … | view |
+| `cp a b`, `ln a b`, `install a b` | view `a`, create `b` |
+| `sed -i`, `perl -i`, `tee`, `dd of=`, `curl -o`, `wget -O` | edit |
+| `find` | view of the paths before its first test |
+| any other command (`cat`, `head`, `grep`, `awk`, `du`, `df`, `python3 x.py`, `git diff a`, …) | view |
 
-Only words that name a path already in the tree count (except creates), so a pattern or a flag is
-never mistaken for a file.
+Only words that name a path that exists count (except creates and edits), so a flag or a value is
+never mistaken for a file. A pattern or program (`grep`, `rg`, `sed`, `awk`, `jq`, …) and a
+subcommand (`git`, `npm`, `make`, …) are skipped. Over ssh, where nothing can be checked, only the
+known readers count. A glob is expanded against the folder it names, up to 40 files.
+
+After the call, the lines of a shell command's output that start with a path in the tree flash
+those files as read, so `grep -rl` and `find` show what they found. While a shell command writes
+one local file, `$.clock.every` measures it (or rsync's `.name.XXXXXX` temp file) for the
+progress label. A call with no file target sets `turn.doing`, which the prompt line shows.
 
 `cd` and `NAME=value` earlier in a command carry to the commands after them, so
 `cd ~/site && F=a.php && sed -i '' -e … $F` names `~/site/a.php`. `placeOf()` puts a path

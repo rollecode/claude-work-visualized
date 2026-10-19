@@ -1,7 +1,13 @@
-### 0.3.0: 2026-10-19
+### 0.4.0: 2026-10-19
 
 * Add live thinking typewriter to the pane
 * Add live branch graph for git work
+
+### 0.3.0: 2026-10-18
+
+* Show every shell command and tool call
+* Add progress for copies and downloads
+* Add scratchpad folder to the tree
 
 ### 0.2.1: 2026-10-17
 

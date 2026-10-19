@@ -11,6 +11,9 @@ export type Activity = {
   endedAt?: number
   /** Tool calls currently running on the path. */
   running: number
+  /** Bytes a running copy or write has landed so far, and of how many when known. */
+  bytes?: number
+  total?: number
 }
 
 /** A deleted path kept on screen while its exit plays. */
@@ -20,6 +23,8 @@ export type TurnInfo = {
   phase: 'idle' | 'working' | 'complete'
   at: number
   counts: Record<Op, string[]>
+  /** A running tool call that touches no file, for the prompt line. */
+  doing?: { text: string; at: number }
 }
 
 /** One Edit or Write replayed in the code view: a window of the file before and after. */
