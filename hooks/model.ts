@@ -615,12 +615,34 @@ function sizeText(bytes: number): string {
   return `${unit > 0 && n < 10 ? n.toFixed(1) : Math.round(n)} ${SIZE_UNITS[unit]}`
 }
 
+export const HOLD_LINE = 2500 // a finished operation keeps the prompt line this long, so it doesn't flash "thinking" between calls
+
+/** The file the prompt line names: the running operation, or one that ended a moment ago. */
+export function heldFocusOf(activity: Readonly<Record<string, Activity>>, now: number): string | undefined {
+  const running = focusOf(activity)
+  if (running !== undefined) return running
+  let best: string | undefined
+  let at = now - HOLD_LINE
+  for (const [path, a] of Object.entries(activity)) {
+    if (a.endedAt !== undefined && a.endedAt >= at) {
+      best = path
+      at = a.endedAt
+    }
+  }
+  return best
+}
+
+/** A tool name as the prompt line shows it: `mcp__claude_ai_Obsidian__edit-note` is `Obsidian edit-note`. */
+export function toolName(tool: string): string {
+  return tool.replace(/^mcp__/, '').replace(/^claude_ai_/, '').replace(/__/g, ' ')
+}
+
 /** A tool call that touches no file, as the prompt line names it: the command, or the tool and its subject. */
 export function doingOf(tool: string, input: Readonly<Record<string, unknown>>): string {
   const subject = ['command', 'description', 'query', 'url', 'skill', 'pattern'].map(k => input[k]).find((v): v is string => typeof v === 'string')
   const first = subject?.trim().split('\n')[0]
   if (tool === 'Bash' && first !== undefined) return first
-  const name = tool.replace(/^mcp__/, '').replace(/__/g, ' ')
+  const name = toolName(tool)
   return first === undefined ? name : `${name} ${first}`
 }
 
@@ -1003,17 +1025,24 @@ export function statusLine(
   now: number,
   fileCount: number,
   columns: number,
-  extra: { waited?: number; git?: { verb: string; text: string; color: string; at: number } } = {},
+  extra: {
+    waited?: number
+    git?: { verb: string; text: string; color: string; at: number; endedAt?: number }
+    /** A tool call the model is still writing, and how much of its input has come. */
+    writing?: { tool: string; bytes: number; at: number }
+  } = {},
 ): Seg[] {
-  const { waited, git } = extra
-  const focus = focusOf(activity)
+  const { waited, git, writing } = extra
+  // A running call wins; a finished one holds the line only until something else starts.
+  const focus = focusOf(activity) ?? (turn.doing === undefined && writing === undefined ? heldFocusOf(activity, now) : undefined)
   const a = focus === undefined ? undefined : activity[focus]
   const cursor = (c: string): Seg => ({ t: '█', c: mix(c, FAINT, pulse(now, 1060)) })
   const shimmer = (text: string, c: string): Seg[] =>
     paint(text, i => ({ c: mix(c, '#ffffff', 0.7 * band(i, ((now / 70) % (text.length + 10)) - 5, 2.5)), b: true }))
   // A git command names what it does to the repository, not the files it touches.
-  if (git !== undefined) {
-    const tail = ` ${(Math.max(0, now - git.at) / 1000).toFixed(1)}s`
+  // A finished git command holds the line only until another call starts.
+  if (git !== undefined && (git.endedAt === undefined || (focusOf(activity) === undefined && turn.doing === undefined && writing === undefined))) {
+    const tail = ` ${(Math.max(0, (git.endedAt ?? now) - git.at) / 1000).toFixed(1)}s`
     const room = columns - 2 - git.verb.length - 1 - tail.length - 2
     return [
       { t: '❯ ', c: CLAUDE, b: true },
@@ -1028,7 +1057,7 @@ export function statusLine(
   if (a !== undefined && focus !== undefined) {
     const col = COLOR[a.op]
     const others = Object.values(activity).filter(x => x.running > 0).length - 1
-    const secs = `${(Math.max(0, now - a.startedAt) / 1000).toFixed(1)}s`
+    const secs = `${(Math.max(0, (a.running > 0 || a.endedAt === undefined ? now : a.endedAt) - a.startedAt) / 1000).toFixed(1)}s`
     const dir = parentOf(focus)
     const progress = progressOf(a)
     const tail = ` ${secs}${progress === undefined ? '' : ` ${progress.text}`}${others > 0 ? ` +${others}` : ''}`
@@ -1054,6 +1083,20 @@ export function statusLine(
       ...shimmer('running', CLAUDE),
       { t: ' ' },
       { t: truncate(turn.doing.text, room), c: BASE },
+      { t: tail, c: MUTED },
+      { t: ' ' },
+      cursor(CLAUDE),
+    ]
+  }
+  // A long tool call (a big Write, a whole note) takes a while to write before it runs.
+  if (writing !== undefined) {
+    const tail = ` ${sizeText(writing.bytes)} ${(Math.max(0, now - writing.at) / 1000).toFixed(1)}s`
+    const room = columns - 2 - 'writing'.length - 1 - tail.length - 2
+    return [
+      { t: '❯ ', c: CLAUDE, b: true },
+      ...shimmer('writing', CLAUDE),
+      { t: ' ' },
+      { t: truncate(toolName(writing.tool), room), c: BASE },
       { t: tail, c: MUTED },
       { t: ' ' },
       cursor(CLAUDE),

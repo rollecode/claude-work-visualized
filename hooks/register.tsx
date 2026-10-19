@@ -13,7 +13,7 @@ import {
 import type { GitRead, PrShown } from './git'
 import {
   CLAUDE, COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
-  baseName, buildRows, classifyBash, counted, doingOf, mentionsOf, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
+  baseName, buildRows, classifyBash, heldFocusOf, counted, doingOf, mentionsOf, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
   placeOf, remotePath, scrollTo, staleKeys, statusLine, summaryLines, thoughtRows, thoughtView, typeTo, withPath, withThought, withoutPath,
 } from './model'
 import type { FolderMemory, Seg, Target } from './model'
@@ -53,6 +53,7 @@ let typed = { key: '', n: 0, at: 0 } // how far the typewriter has got through t
 let thinkBrowse: Browse | undefined // the person scrolling back through the thought
 let thinkArea: CodeArea | undefined // where the thinking section was drawn last frame
 let thinkTop = 0 // the thought's first line shown last frame
+let writing: { tool: string; bytes: number; at: number } | undefined // a tool call the model is still writing
 let animateUntil = 0
 let isWatching = true // mirrors the watching atom for synchronous checks
 let home: string | undefined
@@ -474,6 +475,14 @@ export const register: Register = on => {
       for (let step = await stream.next(); ; step = await stream.next()) {
         if (step.done === true) return step.value
         const chunk = step.value
+        if (chunk.kind === 'tool') {
+          writing = { tool: chunk.name, bytes: 0, at: await $.clock.now() }
+          startAnimating(writing.at)
+        } else if (chunk.kind === 'input' && writing !== undefined) {
+          writing = { ...writing, bytes: writing.bytes + chunk.json.length }
+        } else if (chunk.kind === 'stop') {
+          writing = undefined
+        }
         if (chunk.kind === 'thinking' && !isSettled) {
           const key = `${e.turnId}:${e.index}:${chunk.index}`
           isOpen = true
@@ -489,11 +498,13 @@ export const register: Register = on => {
         yield chunk
       }
     } finally {
+      writing = undefined
       await settle()
     }
   })
 
   on('tool.call', async ($, e, next) => {
+    writing = undefined
     const tool = String(e.tool)
     const input = e as unknown as Record<string, unknown>
     const mutates = tool === 'Bash' || tool === 'Write' || tool === 'Edit' || tool === 'MultiEdit' || tool === 'NotebookEdit'
@@ -696,10 +707,10 @@ export const register: Register = on => {
         key,
       )
     // The prompt line already says thinking while Claude thinks: the section then needs no title.
-    const saysThinking = focusOf(act) === undefined && info.doing === undefined && gitDoingOf(gs) === undefined && info.phase === 'working'
+    const saysThinking = heldFocusOf(act, now) === undefined && info.doing === undefined && gitDoingOf(gs, now) === undefined && writing === undefined && info.phase === 'working'
 
-    /** The thinking section at `at` in the pane: its rule (`always`, or only when it has something to say) and lines. */
-    function thinkingSection(columns: number, rows: number, at: { column: number; row: number }, titled: 'always' | 'when-needed') {
+    /** The thinking section at `at` in the pane: its rule, plain while the prompt line says thinking, and its lines. */
+    function thinkingSection(columns: number, rows: number, at: { column: number; row: number }) {
       const think = thoughtView({ thought: th, typed: typed.n, now, turn: info, columns, rows, top: thinkBrowse?.top })
       thinkTop = think.top
       // Scrolled back down to the end: follow the typing again.
@@ -707,7 +718,7 @@ export const register: Register = on => {
       else if (thinkBrowse !== undefined) thinkBrowse = { ...thinkBrowse, top: think.top }
       const arrows = `${think.above > 0 ? ` ↑${think.above}` : ''}${think.below > 0 ? ` ↓${think.below}` : ''}`.trim()
       const label = saysThinking ? arrows : `thinking${think.waited !== undefined ? ` ${think.waited}s` : ''}${arrows === '' ? '' : ` ${arrows}`}`
-      const hasRule = think.lines.length > 0 && (label !== '' || titled === 'always')
+      const hasRule = think.lines.length > 0
       const used = think.lines.length + (hasRule ? 1 : 0)
       thinkArea = used > 0 ? { column: at.column, row: at.row, columns, rows: used } : undefined
       const els = [
@@ -756,7 +767,7 @@ export const register: Register = on => {
       const sideColumns = paneColumns - treeColumns - 2
       // With an edit to show, thinking and git leave the code view most of the column.
       const share = clip === undefined ? 0.45 : 0.25
-      const thinking = thinkingSection(sideColumns, Math.max(3, Math.floor(height * share)), { column: treeColumns + 2, row: 0 }, 'always')
+      const thinking = thinkingSection(sideColumns, Math.max(3, Math.floor(height * share)), { column: treeColumns + 2, row: 0 })
       const gitPart = gitSection(sideColumns, Math.max(4, Math.floor(height * share)))
       const codeRows = Math.max(3, height - 1 - thinking.rows - gitPart.rows)
       codeArea = clip === undefined ? undefined : { column: treeColumns + 2, row: thinking.rows + gitPart.rows, columns: sideColumns, rows: codeRows + 1 }
@@ -773,7 +784,7 @@ export const register: Register = on => {
       )
     }
 
-    const thinking = thinkingSection(paneColumns, thoughtRows(height), { column: 0, row: 2 }, 'when-needed')
+    const thinking = thinkingSection(paneColumns, thoughtRows(height), { column: 0, row: 2 })
     const gitPart = gitSection(paneColumns, gitRows(height))
     const codeRows = clip === undefined ? 0 : Math.max(3, Math.min(Math.max(clip.before.length, clip.after.length) + 2, Math.floor(height * 0.45)))
     codeArea = clip === undefined ? undefined : { column: 0, row: 0, columns: paneColumns, rows: codeRows + 1 }
@@ -803,7 +814,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" width={columns} flexGrow={1}>
           {line(headerLine(now, focus !== undefined || info.phase === 'working', root, remoteOf(act, now)), 'h')}
-          {line(statusLine(act, info, now, fileCount, columns, { waited, git: gitDoingOf(gs) }), 's')}
+          {line(statusLine(act, info, now, fileCount, columns, { waited, git: gitDoingOf(gs, now), writing }), 's')}
           {over.els}
           {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1', columns)}
           {rows.length === 0 ? line([{ t: ' scanning…', c: MUTED }], 'empty') : visible.map(r => line(r.segs, r.key))}

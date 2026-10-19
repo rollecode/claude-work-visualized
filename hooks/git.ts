@@ -2,7 +2,7 @@
 // Pure, like model.ts: register.tsx runs git and hands its output here.
 
 import type { GitAction, GitKind, GitRow, GitState } from '../types'
-import { BASE, CLAUDE, COLOR, FAINT, MUTED, mix } from './model'
+import { BASE, CLAUDE, COLOR, FAINT, HOLD_LINE, MUTED, mix } from './model'
 import type { Seg } from './model'
 
 export const GIT_LINGER = 60_000 // the view stays this long after the last git command
@@ -333,13 +333,14 @@ export function gitFade(state: GitState | null, now: number): number {
 }
 
 /** The running git command as the prompt line names it, in the action's colour. */
-export type GitDoing = { verb: string; text: string; color: string; at: number }
+export type GitDoing = { verb: string; text: string; color: string; at: number; endedAt?: number }
 
-export function gitDoingOf(state: GitState | null): GitDoing | undefined {
+/** The git command on the prompt line: while it runs, and held a moment after, so "thinking" doesn't flash in between. */
+export function gitDoingOf(state: GitState | null, now = Infinity): GitDoing | undefined {
   const action = state?.action
-  if (state === null || action === undefined || state.endedAt !== undefined) return undefined
+  if (state === null || action === undefined || (state.endedAt !== undefined && now - state.endedAt > HOLD_LINE)) return undefined
   const text = action.message ?? (action.kind === 'pr-merge' && action.ref ? `#${action.ref}` : action.ref) ?? state.head
-  return { verb: KIND_DOING[action.kind], text, color: KIND_COLOR[action.kind], at: state.at }
+  return { verb: KIND_DOING[action.kind], text, color: KIND_COLOR[action.kind], at: state.at, ...(state.endedAt === undefined ? {} : { endedAt: state.endedAt }) }
 }
 
 // ---------------------------------------------------------------- drawing

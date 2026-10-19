@@ -512,7 +512,7 @@ test('scratchpad files get a top folder of their own', async () => {
 test('a call that touches no file shows on the prompt line while it runs', async () => {
   expect(doingOf('Bash', { command: 'df -h\necho done' })).toBe('df -h')
   expect(doingOf('WebSearch', { query: 'tokyo night' })).toBe('WebSearch tokyo night')
-  expect(doingOf('mcp__claude_ai_Todoist__add-tasks', {})).toBe('claude_ai_Todoist add-tasks')
+  expect(doingOf('mcp__claude_ai_Todoist__add-tasks', {})).toBe('Todoist add-tasks')
   const turn = { ...emptyTurn(), phase: 'working' as const, doing: { text: 'npm test', at: 0 } }
   expect(text(statusLine({}, turn, 1500, 10, 80))).toContain('running npm test 1.5s')
   for (const columns of [24, 40, 80]) {
@@ -831,4 +831,50 @@ test('a wide pane puts the thought beside the tree, where the wheel scrolls it',
   const back = await mount()
   expect(await shownBy(back)).toContain('First idea.')
   await back.unmount()
+})
+
+test('the prompt line holds a finished call a moment, then names a tool call being written', async () => {
+  const working = { ...emptyTurn(), phase: 'working' as const }
+  const done = { 'src/a.ts': { op: 'view' as const, startedAt: 0, endedAt: 1000, running: 0 } }
+  expect(text(statusLine(done, working, 2000, 1, 60))).toContain('reading src/a.ts 1.0s')
+  expect(text(statusLine(done, working, 4000, 1, 60))).toContain('thinking')
+  const writing = { tool: 'mcp__claude_ai_Obsidian__edit-note', bytes: 12_400, at: 0 }
+  expect(text(statusLine({}, working, 4000, 1, 60, { writing }))).toContain('writing Obsidian edit-note 12 kB 4.0s')
+})
+
+test('a tool call still being written shows on the prompt line', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', () => ({ value: [] }))
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  let finish = () => {}
+  const held = new Promise<void>(r => (finish = r))
+  on('turn.step', async function* () {
+    yield { kind: 'tool', index: 0, id: 't', name: 'mcp__claude_ai_Obsidian__edit-note' }
+    yield { kind: 'input', index: 0, json: 'x'.repeat(2500) }
+    await held
+    return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: null } as never
+  })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await $.turn.start({ turnId: 't1', source: 'prompt' } as never).catch(() => undefined)
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 })
+  const draining = (async () => {
+    for (let step = await stream.next(); step.done !== true; step = await stream.next()) {}
+  })()
+  await clock.advance(1000)
+  const ui = await $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  expect((await ui.findAll({ type: 'Text' })).map(x => x.text).join('')).toContain('writing Obsidian edit-note 2.5 kB')
+  await ui.unmount()
+  finish()
+  await draining
 })

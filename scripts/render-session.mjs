@@ -34,7 +34,7 @@ registerHooks({
 const { clipOf, codeLines, codeRule, currentClip } = await import('../hooks/code.ts')
 const {
   CLAUDE, COLOR, FAINT, ICON, MUTED,
-  buildRows, counted, emptyTurn, focusOf, headerLine, legendLines, mix, scrollTo, statusLine, summaryLines, thoughtView, typeTo, withThought,
+  buildRows, counted, emptyTurn, focusOf, headerLine, heldFocusOf, legendLines, mix, scrollTo, statusLine, summaryLines, thoughtView, typeTo, withThought,
 } = await import('../hooks/model.ts')
 const { gitDoingOf, gitEnded, gitStarted, gitView, parseGraph } = await import('../hooks/git.ts')
 
@@ -277,8 +277,8 @@ function paneAt(t) {
     if (th.key !== typed.key) typed = { key: th.key, n: 0, at: t }
     typed = { key: th.key, n: typeTo(typed.n, th.text.length, Math.min(250, t - typed.at), th.endedAt === undefined ? 'reading' : 'late'), at: t }
   }
-  const doing = gitDoingOf(s.git)
-  const saysThinking = focusOf(s.activity) === undefined && doing === undefined && s.turn.phase === 'working'
+  const doing = gitDoingOf(s.git, t)
+  const saysThinking = heldFocusOf(s.activity, t) === undefined && doing === undefined && s.turn.phase === 'working'
   const side = []
   const think = thoughtView({ thought: th, typed: typed.n, now: t, turn: s.turn, columns: CODE, rows: Math.floor(height * (s.clip ? 0.25 : 0.45)) })
   if (think.lines.length > 0) {
