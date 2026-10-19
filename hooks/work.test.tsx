@@ -485,6 +485,7 @@ test('thinking wraps to the pane, shows its last lines and fades once done', asy
   const done = { ...withThought(null, 'k', 'Done.', 0), endedAt: 1000 }
   expect(text(thoughtLines(done, 5, 2000, 40).flat())).toBe(' Done.')
   expect(thoughtLines(done, 5, 1000 + T.thoughtLinger + T.thoughtFade + 1, 40)).toEqual([])
+  expect(thoughtLines(withThought(null, 'k', '', 0), 0, 100, 40)).toEqual([])
 })
 
 test('thinking streamed in a step types itself into the pane', async ($, on) => {

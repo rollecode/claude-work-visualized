@@ -1015,7 +1015,8 @@ export function thoughtFade(thought: Thought | null, typed: number, now: number)
 /** The last lines of the thought, typed up to `typed`, with the cursor at its edge. */
 export function thoughtLines(thought: Thought | null, typed: number, now: number, columns: number): Seg[][] {
   const fade = thoughtFade(thought, typed, now)
-  if (thought === null || fade >= 1) return []
+  // Claude Code streams thinking empty unless `showThinkingSummaries` is on.
+  if (thought === null || thought.text === '' || fade >= 1) return []
   const total = thought.dropped + thought.text.length
   const isTyping = thought.endedAt === undefined || typed < total
   const shown = thought.text.slice(0, Math.max(0, Math.floor(typed) - thought.dropped))
