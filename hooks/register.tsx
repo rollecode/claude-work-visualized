@@ -21,7 +21,7 @@ const MAX_ENTRIES = 2000
 const MAX_DEPTH = 12
 const FRAME_MS = 33 // ~30 fps while anything moves, the terminal's cap for a shown pane
 const POLL_MS = 1500 // how often the project is rescanned for changes made outside tool calls
-const SPLIT_COLUMNS = 96 // from this wide the code view sits beside the tree, else under it
+const SPLIT_COLUMNS = 96 // from this wide thinking, git and the code view sit beside the tree, else above and under it
 const EDITORS = new Set(['Edit', 'MultiEdit', 'Write'])
 const MAX_REPLAYS = 4 // files of one tool call the code view checks and replays
 const MAX_MATCHES = 40 // files one glob or one tool's output lights up
@@ -658,70 +658,105 @@ export const register: Register = on => {
         ))}
       </Box>
     )
-    const isSplit = clip !== undefined && paneColumns >= SPLIT_COLUMNS
-    const treeColumns = isSplit ? Math.max(30, Math.min(48, Math.floor(paneColumns * 0.4))) : paneColumns
-    const codeColumns = isSplit ? paneColumns - treeColumns - 2 : paneColumns
-    const codeRows = clip === undefined
-      ? 0
-      : isSplit
-        ? height - 1
-        : Math.max(3, Math.min(Math.max(clip.before.length, clip.after.length) + 2, Math.floor(height * 0.45)))
-    let view: { from: number; to: number } | undefined
-    let codeSegs: Seg[][] = []
-    if (clip !== undefined && browse !== undefined) {
-      const shown = fileLines(clip, codeColumns, codeRows, browse.top)
-      browse = { ...browse, top: shown.top }
-      view = { from: shown.from, to: shown.to }
-      codeSegs = shown.lines
-    } else if (clip !== undefined) {
-      const replay = codeLines(clip, now, codeColumns, codeRows, codeScroll)
-      codeScroll = replay.scroll
-      codeSegs = replay.lines
-    }
-    codeArea = clip === undefined ? undefined : { column: isSplit ? treeColumns + 2 : 0, row: 0, columns: codeColumns, rows: codeRows + 1 }
-    const code = clip !== undefined && (
-      <Box flexDirection="column" width={codeColumns}>
-        {line(codeRule(clip, codeColumns, view), 'cr')}
-        {codeSegs.map((segs, i) => line(segs, `c${i}`))}
-      </Box>
-    )
-
-    if (isSplit) {
-      return (
-        <Box flexDirection="row" width={paneColumns} flexGrow={1}>
-          {mapView(treeColumns)}
-          <Box width={2} />
-          {code}
-        </Box>
+    // `── label ─────`, a section rule; a plain rule when the label is empty.
+    const rule = (label: string, key: string, columns: number, c = FAINT) =>
+      line(
+        label === ''
+          ? [{ t: '─'.repeat(columns), c: FAINT }]
+          : [{ t: '── ', c: FAINT }, { t: label, c, b: true }, { t: ' ' + '─'.repeat(Math.max(0, columns - label.length - 4)), c: FAINT }],
+        key,
       )
-    }
-    return mapView(paneColumns, code, clip === undefined ? 0 : codeRows + 1)
+    // The prompt line already says thinking while Claude thinks: the section then needs no title.
+    const saysThinking = focusOf(act) === undefined && info.doing === undefined && info.phase === 'working'
 
-    /** The tree with its header, status, summary card and legend; `under` goes below the tree. */
-    function mapView(columns: number, under?: RenderChildren, underRows = 0) {
-      // `── label ─────`, a section rule.
-      const rule = (label: string, key: string, c = FAINT) =>
-        line([{ t: '── ', c: FAINT }, { t: label, c, b: true }, { t: ' ' + '─'.repeat(Math.max(0, columns - label.length - 4)), c: FAINT }], key)
-
-      const rows = buildRows({ tree: entries, activity: act, ghosts: gh, now, columns, folders })
-      const think = thoughtView({ thought: th, typed: typed.n, now, turn: info, columns, rows: thoughtRows(height), top: thinkBrowse?.top })
-      const thinking = think.lines
+    /** The thinking section at `at` in the pane: its rule (`always`, or only when it has something to say) and lines. */
+    function thinkingSection(columns: number, rows: number, at: { column: number; row: number }, titled: 'always' | 'when-needed') {
+      const think = thoughtView({ thought: th, typed: typed.n, now, turn: info, columns, rows, top: thinkBrowse?.top })
       thinkTop = think.top
       // Scrolled back down to the end: follow the typing again.
       if (thinkBrowse !== undefined && think.below === 0) thinkBrowse = undefined
       else if (thinkBrowse !== undefined) thinkBrowse = { ...thinkBrowse, top: think.top }
-      // The prompt line already says thinking while Claude thinks: the section then needs no title.
-      const saysThinking = focusOf(act) === undefined && info.doing === undefined && info.phase === 'working'
       const arrows = `${think.above > 0 ? ` ↑${think.above}` : ''}${think.below > 0 ? ` ↓${think.below}` : ''}`.trim()
-      const thinkLabel = saysThinking ? arrows : `thinking${think.waited !== undefined ? ` ${think.waited}s` : ''}${arrows === '' ? '' : ` ${arrows}`}`
-      const thinkRule = thinking.length > 0 && thinkLabel !== ''
-      const thinkingRows = thinking.length + (thinkRule ? 1 : 0)
-      thinkArea = thinkingRows > 0 ? { column: 0, row: 2, columns, rows: thinkingRows } : undefined
+      const label = saysThinking ? arrows : `thinking${think.waited !== undefined ? ` ${think.waited}s` : ''}${arrows === '' ? '' : ` ${arrows}`}`
+      const hasRule = think.lines.length > 0 && (label !== '' || titled === 'always')
+      const used = think.lines.length + (hasRule ? 1 : 0)
+      thinkArea = used > 0 ? { column: at.column, row: at.row, columns, rows: used } : undefined
+      const els = [
+        hasRule && rule(label, 'r0', columns, mix(CLAUDE, FAINT, think.fade)),
+        ...think.lines.map((segs, i) => line(segs, `th${i}`)),
+      ]
+      return { els, rows: used, waited: think.waited }
+    }
+
+    function gitSection(columns: number, rows: number) {
+      const gv = gitView(gs, now, columns, rows)
+      const used = gv.lines.length > 0 ? gv.lines.length + 1 : 0
+      const els = used === 0 ? [] : [rule(gv.label, 'rg', columns, mix(CLAUDE, FAINT, gv.fade)), ...gv.lines.map((segs, i) => line(segs, `git${i}`))]
+      return { els, rows: used }
+    }
+
+    /** The code view's rule and rows, replaying the edit or showing where the person scrolled. */
+    function codeSection(columns: number, rows: number) {
+      if (clip === undefined) return undefined
+      let view: { from: number; to: number } | undefined
+      let segs: Seg[][]
+      if (browse !== undefined) {
+        const shown = fileLines(clip, columns, rows, browse.top)
+        browse = { ...browse, top: shown.top }
+        view = { from: shown.from, to: shown.to }
+        segs = shown.lines
+      } else {
+        const replay = codeLines(clip, now, columns, rows, codeScroll)
+        codeScroll = replay.scroll
+        segs = replay.lines
+      }
+      return (
+        <Box flexDirection="column" width={columns}>
+          {line(codeRule(clip, columns, view), 'cr')}
+          {segs.map((row, i) => line(row, `c${i}`))}
+        </Box>
+      )
+    }
+
+    // From SPLIT_COLUMNS wide, what Claude is doing (thinking, git, the code view) goes beside the tree.
+    const hasThinking = thoughtView({ thought: th, typed: typed.n, now, turn: info, columns: 40, rows: 1 }).lines.length > 0
+    const hasGit = gitView(gs, now, 40, 1).lines.length > 0
+    const isSplit = paneColumns >= SPLIT_COLUMNS && (clip !== undefined || hasThinking || hasGit)
+    if (isSplit) {
+      const treeColumns = Math.max(30, Math.min(48, Math.floor(paneColumns * 0.4)))
+      const sideColumns = paneColumns - treeColumns - 2
+      // With an edit to show, thinking and git leave the code view most of the column.
+      const share = clip === undefined ? 0.45 : 0.25
+      const thinking = thinkingSection(sideColumns, Math.max(3, Math.floor(height * share)), { column: treeColumns + 2, row: 0 }, 'always')
+      const gitPart = gitSection(sideColumns, Math.max(4, Math.floor(height * share)))
+      const codeRows = Math.max(3, height - 1 - thinking.rows - gitPart.rows)
+      codeArea = clip === undefined ? undefined : { column: treeColumns + 2, row: thinking.rows + gitPart.rows, columns: sideColumns, rows: codeRows + 1 }
+      return (
+        <Box flexDirection="row" width={paneColumns} flexGrow={1}>
+          {mapView(treeColumns, saysThinking ? thinking.waited : undefined)}
+          <Box width={2} />
+          <Box flexDirection="column" width={sideColumns}>
+            {thinking.els}
+            {gitPart.els}
+            {codeSection(sideColumns, codeRows)}
+          </Box>
+        </Box>
+      )
+    }
+
+    const thinking = thinkingSection(paneColumns, thoughtRows(height), { column: 0, row: 2 }, 'when-needed')
+    const gitPart = gitSection(paneColumns, gitRows(height))
+    const codeRows = clip === undefined ? 0 : Math.max(3, Math.min(Math.max(clip.before.length, clip.after.length) + 2, Math.floor(height * 0.45)))
+    codeArea = clip === undefined ? undefined : { column: 0, row: 0, columns: paneColumns, rows: codeRows + 1 }
+    const above = { els: [...thinking.els, ...gitPart.els], rows: thinking.rows + gitPart.rows }
+    return mapView(paneColumns, saysThinking ? thinking.waited : undefined, above, codeSection(paneColumns, codeRows), clip === undefined ? 0 : codeRows + 1)
+
+    /** The tree with its header, status, summary card and legend; `over` goes above the tree, `under` below it. */
+    function mapView(columns: number, waited?: number, over = { els: [] as RenderChildren[], rows: 0 }, under?: RenderChildren, underRows = 0) {
+      const rows = buildRows({ tree: entries, activity: act, ghosts: gh, now, columns, folders })
       const summary = summaryLines(info, now, columns - 4)
       const legend = legendLines(columns)
-      const gv = gitView(gs, now, columns, gitRows(height))
-      const gitLines = gv.lines.length > 0 ? gv.lines.length + 1 : 0
-      const chrome = 3 + 1 + legend.length + 1 + (summary.length > 0 ? summary.length + 2 : 0) + thinkingRows + gitLines + underRows
+      const chrome = 3 + 1 + legend.length + 1 + (summary.length > 0 ? summary.length + 2 : 0) + over.rows + underRows
       const room = Math.max(3, height - chrome)
       const focus = focusOf(act)
       scroll = scrollTo(scroll, rows, focus, room)
@@ -731,7 +766,7 @@ export const register: Register = on => {
       const fileCount = entries.filter(t => !t.d).length
       // Under the tree, the code view starts below the header, the tree and the card.
       if (under !== undefined && codeArea !== undefined) {
-        codeArea = { ...codeArea, row: 3 + thinkingRows + gitLines + visible.length + (below > 0 ? 1 : 0) + (summary.length > 0 ? summary.length + 2 : 0) }
+        codeArea = { ...codeArea, row: 3 + over.rows + visible.length + (below > 0 ? 1 : 0) + (summary.length > 0 ? summary.length + 2 : 0) }
       }
       const age = now - info.at
       const card = Math.min(smoothIn(age / 500), info.phase === 'complete' && age > T.summary - 1500 ? Math.max(0, (T.summary - age) / 1500) : 1)
@@ -739,12 +774,9 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" width={columns} flexGrow={1}>
           {line(headerLine(now, focus !== undefined || info.phase === 'working', root, remoteOf(act, now)), 'h')}
-          {line(statusLine(act, info, now, fileCount, columns, saysThinking ? think.waited : undefined), 's')}
-          {thinkRule && rule(thinkLabel, 'r0', mix(CLAUDE, FAINT, think.fade))}
-          {thinking.map((segs, i) => line(segs, `th${i}`))}
-          {gitLines > 0 && rule(gv.label, 'rg', mix(CLAUDE, FAINT, gv.fade))}
-          {gv.lines.map((segs, i) => line(segs, `git${i}`))}
-          {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1')}
+          {line(statusLine(act, info, now, fileCount, columns, waited), 's')}
+          {over.els}
+          {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1', columns)}
           {rows.length === 0 ? line([{ t: ' scanning…', c: MUTED }], 'empty') : visible.map(r => line(r.segs, r.key))}
           {below > 0 && line([{ t: `   ↓ ${below} more`, c: FAINT }], 'down')}
           {summary.length > 0 && (
@@ -754,7 +786,7 @@ export const register: Register = on => {
           )}
           {under}
           <Box flexGrow={1} />
-          {rule('legend', 'r2')}
+          {rule('legend', 'r2', columns)}
           {legend.map((segs, i) => line(segs, `leg${i}`))}
         </Box>
       )

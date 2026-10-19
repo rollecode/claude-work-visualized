@@ -787,3 +787,48 @@ test('a wave of dots holds the place until the thinking text comes, and a step w
   expect(after).toContain('Late summary.')
   expect(after).not.toContain('• • •')
 })
+
+test('a wide pane puts the thought beside the tree, where the wheel scrolls it', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', () => ({ value: [] }))
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('ui.scroll', () => ({}) as never)
+  on('turn.step', async function* () {
+    yield { kind: 'thinking', index: 0, text: 'First idea. ' + 'more '.repeat(300) }
+    return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 })
+  for (let step = await stream.next(); step.done !== true; step = await stream.next()) {}
+
+  const mount = () => $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  const shownBy = async (ui: Awaited<ReturnType<typeof mount>>) => (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  const ui = await mount()
+  await clock.advance(15_000)
+  await ui.unmount()
+  const wheel = (column: number) =>
+    $.ui.scroll({ component: 'Pane', requestId: 'work-map', by: -80, offset: 0, bodyRows: 30, contentRows: 30, origin: { kind: 'person' }, pointer: { column, row: 3 } } as never)
+
+  // Over the tree, the wheel isn't the thought's.
+  await wheel(5)
+  const still = await mount()
+  expect(await shownBy(still)).toContain('── tree')
+  expect(await shownBy(still)).not.toContain('First idea.')
+  await still.unmount()
+
+  await wheel(60)
+  const back = await mount()
+  expect(await shownBy(back)).toContain('First idea.')
+  await back.unmount()
+})
