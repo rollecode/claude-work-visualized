@@ -43,6 +43,20 @@ export type Clip = {
   changed: number[]
 }
 
+/** The thinking block streaming now, or the last one, as one line of text. */
+export type Thought = {
+  /** Which block this is: a new key starts the typewriter over. */
+  key: string
+  /** Whitespace collapsed to single spaces; only the tail is kept. */
+  text: string
+  /** Characters cut from the front of `text` to keep it short. */
+  dropped: number
+  /** When the last piece arrived. */
+  at: number
+  /** Absent while the block is still streaming. */
+  endedAt?: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'work-visualized': {
@@ -52,6 +66,7 @@ declare module 'claude-code' {
       turn: TurnInfo
       watching: boolean
       clips: Clip[]
+      thought: Thought | null
     }
   }
 }

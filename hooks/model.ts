@@ -2,7 +2,7 @@
 // turning the tree plus Claude's activity into styled rows for a given instant.
 // Nothing here touches `$`, so tests drive it with plain values.
 
-import type { Activity, Ghost, Op, TreeEntry, TurnInfo } from '../types'
+import type { Activity, Ghost, Op, Thought, TreeEntry, TurnInfo } from '../types'
 
 export const OPS: readonly Op[] = ['view', 'edit', 'create', 'delete']
 
@@ -54,6 +54,8 @@ export const T = {
   expand: 450,
   collapse: 500,
   summary: 20_000,
+  thoughtLinger: 6000, // a finished thought stays this long once typed out
+  thoughtFade: 1500,
 }
 
 export const IGNORED = new Set([
@@ -561,8 +563,10 @@ export function isAnimating(
   ghosts: Readonly<Record<string, Ghost>>,
   turn: TurnInfo,
   now: number,
+  thought: Thought | null = null,
 ): boolean {
   if (Object.keys(ghosts).length > 0) return true
+  if (thought !== null && (thought.endedAt === undefined || now - thought.endedAt < T.thoughtLinger + T.thoughtFade + 2000)) return true
   if (turn.phase === 'complete' && now - turn.at < T.summary + 1000) return true
   return Object.values(activity).some(a => levelOf(a, now) !== 'none')
 }
@@ -951,6 +955,85 @@ export function statusLine(activity: Readonly<Record<string, Activity>>, turn: T
   }
   if (turn.phase === 'working') return [{ t: '❯ ', c: CLAUDE, b: true }, ...shimmer('thinking', MUTED), { t: ' ' }, cursor(MUTED)]
   return [{ t: '❯ ', c: MUTED }, { t: `idle · ${fileCount} files`, c: MUTED }, { t: ' ' }, cursor(MUTED)]
+}
+
+// ---------------------------------------------------------------- thinking
+
+const THOUGHT_KEEP = 4000 // characters of a thinking block kept for the typewriter
+export const THOUGHT_LINES = 3
+const TYPE_CPS = 120 // typing speed while the typewriter keeps up
+const TYPE_CATCH_UP = 800 // a backlog is typed out within about this long, in ms
+
+/** Appends a streamed piece of thinking; a new `key` starts a new thought. */
+export function withThought(thought: Thought | null, key: string, piece: string, now: number): Thought {
+  const same = thought !== null && thought.key === key
+  // Emoji can be two cells wide, so they are dropped like everywhere else in the pane.
+  const clean = piece.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '')
+  const joined = (same ? thought.text + clean : clean.trimStart()).replace(/\s+/g, ' ')
+  const cut = Math.max(0, joined.length - THOUGHT_KEEP)
+  return { key, text: joined.slice(cut), dropped: (same ? thought.dropped : 0) + cut, at: now }
+}
+
+/** Moves the typewriter on by `dt` ms: steady while it keeps up, faster when behind. */
+export function typeTo(typed: number, total: number, dt: number): number {
+  if (typed >= total) return total
+  const step = Math.max((TYPE_CPS * dt) / 1000, ((total - typed) * dt) / TYPE_CATCH_UP)
+  return Math.min(total, typed + step)
+}
+
+/** Greedy word wrap; a word longer than the line is broken. */
+export function wrapWords(text: string, width: number): string[] {
+  const lines: string[] = []
+  let line = ''
+  for (const word of text.split(' ')) {
+    let w = word
+    while (w.length > width) {
+      if (line !== '') lines.push(line)
+      line = ''
+      lines.push(w.slice(0, width))
+      w = w.slice(width)
+    }
+    if (line === '') line = w
+    else if (line.length + 1 + w.length <= width) line += ' ' + w
+    else {
+      lines.push(line)
+      line = w
+    }
+  }
+  if (line !== '') lines.push(line)
+  return lines
+}
+
+/** 0 while the thought is shown, rising to 1 as it fades out once typed and done. */
+export function thoughtFade(thought: Thought | null, typed: number, now: number): number {
+  if (thought === null) return 1
+  const caughtUp = typed >= thought.dropped + thought.text.length
+  if (thought.endedAt === undefined || !caughtUp) return 0
+  return smooth((now - thought.endedAt - T.thoughtLinger) / T.thoughtFade)
+}
+
+/** The last lines of the thought, typed up to `typed`, with the cursor at its edge. */
+export function thoughtLines(thought: Thought | null, typed: number, now: number, columns: number): Seg[][] {
+  const fade = thoughtFade(thought, typed, now)
+  if (thought === null || fade >= 1) return []
+  const total = thought.dropped + thought.text.length
+  const isTyping = thought.endedAt === undefined || typed < total
+  const shown = thought.text.slice(0, Math.max(0, Math.floor(typed) - thought.dropped))
+  const lines = wrapWords(shown, Math.max(1, columns - 2)).slice(-THOUGHT_LINES)
+  if (lines.length === 0) lines.push('')
+  const faded = (c: string) => mix(c, FAINT, fade)
+  return lines.map((text, i) => {
+    const isLast = i === lines.length - 1
+    const tone = mix(MUTED, BASE, (i + 1) / lines.length)
+    const segs: Seg[] = [{ t: ' ' }]
+    segs.push(...paint(text, (j, n) => {
+      const edge = n - j
+      const lit = isLast && isTyping && edge <= 3 ? mix('#ffffff', tone, (edge - 1) / 3) : tone
+      return { c: faded(lit) }
+    }))
+    if (isLast && isTyping) segs.push({ t: '▏', c: mix(CLAUDE, FAINT, pulse(now, 1060)) })
+    return segs
+  })
 }
 
 export function legendLines(columns: number): Seg[][] {

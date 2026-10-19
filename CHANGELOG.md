@@ -1,3 +1,7 @@
+### 0.2.2: 2026-10-19
+
+* Add live thinking typewriter to the pane
+
 ### 0.2.1: 2026-10-17
 
 * Make pane background transparent

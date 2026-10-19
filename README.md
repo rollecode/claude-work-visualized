@@ -22,6 +22,7 @@ This is Rolle's fork of [GrzeskoByte/claude-work-visualized](https://github.com/
 - **Code view.** Each `Edit` and `Write`, and each file a shell command changes (`sed -i`, `>`, `tee`, a script that rewrites a file it names), is replayed as keystrokes: replaced lines turn red and fold away, new lines type in behind a caret, and gutter marks stay for a while. Highlighting covers about 60 languages through Prism, in Tokyo Night colours.
 - **Quiet chat.** While the pane is shown, an edit's result in the chat is one line (`± Edited src/app.ts +3 -1`), because the pane already shows the diff.
 - **Remote work.** Files touched over `ssh`, `scp` and `rsync` show under a folder per host (`deploy@web1:/etc/nginx/…`), and the header names the host Claude is working on.
+- **Live thinking.** Claude's thinking types itself out under the prompt line as it streams, the last three lines with a blinking cursor, and fades a few seconds after the thought ends.
 - **Completion card.** When a turn ends, a card counts the files viewed, edited, created and deleted.
 - **Terminal friendly.** One-cell glyphs and box-drawing characters only, up to 30 fps while something moves, idle otherwise.
 

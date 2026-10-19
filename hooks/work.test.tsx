@@ -1,6 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { buildRows, classifyBash, diffTrees, emptyTurn, focusOf, mentionsOf, placeOf, relPath, remotePath, statusLine, summaryLines, T } from './model'
+import {
+  buildRows, classifyBash, diffTrees, emptyTurn, focusOf, mentionsOf, placeOf, relPath, remotePath, statusLine, summaryLines, T, thoughtLines,
+  typeTo, withThought, wrapWords,
+} from './model'
 import type { FolderMemory } from './model'
 
 // The test environment has it; the engine's typings leave it out.
@@ -452,4 +455,81 @@ test('only changes that follow Claude\'s own tool calls count on the card', asyn
   expect(shown).toContain('other.log')
   expect(shown).toContain('created   1')
   await ui.unmount()
+})
+
+test('thinking is kept as one line, a new block starting over', async () => {
+  const a = withThought(null, 'k1', '  Let me\n\nlook', 0)
+  expect(a.text).toBe('Let me look')
+  const b = withThought(a, 'k1', ' at  this.', 10)
+  expect(b.text).toBe('Let me look at this.')
+  expect(withThought(b, 'k2', 'Next.', 20)).toEqual({ key: 'k2', text: 'Next.', dropped: 0, at: 20 })
+})
+
+test('the typewriter keeps a steady pace and catches up when behind', async () => {
+  expect(typeTo(0, 10, 33)).toBeLessThan(10)
+  expect(typeTo(0, 10, 2000)).toBe(10)
+  expect(typeTo(0, 4000, 1000)).toBe(4000)
+  expect(typeTo(5, 5, 33)).toBe(5)
+})
+
+test('thinking wraps to the pane, shows its last lines and fades once done', async () => {
+  expect(wrapWords('one two three', 7)).toEqual(['one two', 'three'])
+  expect(wrapWords('abcdefghij', 4)).toEqual(['abcd', 'efgh', 'ij'])
+  const long = withThought(null, 'k', 'word '.repeat(60), 0)
+  const lines = thoughtLines(long, 10_000, 100, 30)
+  expect(lines.length).toBe(3)
+  for (const l of lines) expect(text(l).length).toBeLessThanOrEqual(30)
+  expect(text(lines[2] ?? [])).toContain('▏')
+  const half = thoughtLines(withThought(null, 'k', 'Reading the config', 0), 7, 100, 40)
+  expect(text(half.flat())).toBe(' Reading▏')
+  const done = { ...withThought(null, 'k', 'Done.', 0), endedAt: 1000 }
+  expect(text(thoughtLines(done, 5, 2000, 40).flat())).toBe(' Done.')
+  expect(thoughtLines(done, 5, 1000 + T.thoughtLinger + T.thoughtFade + 1, 40)).toEqual([])
+})
+
+test('thinking streamed in a step types itself into the pane', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', () => ({ value: [] }))
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('turn.step', async function* () {
+    yield { kind: 'thinking', index: 0, text: 'Checking how the\nconfig is loaded' }
+    yield { kind: 'text', index: 1, text: 'Done.' }
+    return { turnId: 't1', index: 0, answer: 'Done.', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 })
+  const chunks: unknown[] = []
+  let step = await stream.next()
+  for (; step.done !== true; step = await stream.next()) chunks.push(step.value)
+  expect(chunks.length).toBe(2)
+  expect(step.value.answer).toBe('Done.')
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({
+      plugin: 'work-visualized',
+      surface,
+      component: 'Pane',
+      requestId: 'work-map',
+      props: { title: 'Claude Work', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    })
+    await clock.advance(2000)
+    await ui.unmount()
+    const again = await $.ui.mount({
+      plugin: 'work-visualized',
+      surface,
+      component: 'Pane',
+      requestId: 'work-map',
+      props: { title: 'Claude Work', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    })
+    const shown = (await again.findAll({ type: 'Text' })).map(x => x.text).join('')
+    expect(shown).toContain('thinking')
+    expect(shown).toContain('Checking how the config is loaded')
+    await again.unmount()
+  }
 })
