@@ -1,3 +1,9 @@
+### 0.5.3: 2026-10-20
+
+* Fix thinking title blinking between tool calls
+* Add empty row above the thought
+* Update demo GIF
+
 ### 0.5.2: 2026-10-20
 
 * Keep the turn's thinking, scroll back through it
