@@ -13,6 +13,14 @@ A Claude Code plugin that adds a live, animated map of your project next to the 
 
 This is Rolle's fork of [GrzeskoByte/claude-work-visualized](https://github.com/GrzeskoByte/claude-work-visualized). It adds the code view, syntax highlighting, one-line edit results in the chat, remote work over `ssh`, `scp` and `rsync`, and replays of files changed by shell commands. See the [changelog](CHANGELOG.md).
 
+## Quick install via Claude Code
+
+Paste this into Claude Code and let it do the installing:
+
+```
+Install the Claude Code plugin from https://github.com/rollecode/claude-work-visualized. Run `claude plugin marketplace add rollecode/claude-work-visualized` and then `claude plugin install work-visualized@claude-work-visualized`. In ~/.claude/settings.json, set "verbose": false, "bashEditDiffEnabled": false and "showThinkingSummaries": true (the pane shows diffs and thinking itself, so the chat can stay short). Tell me to restart Claude Code and, if the pane doesn't open by itself, to run /watch.
+```
+
 ## Features
 
 - **Live file tree.** The project is scanned at session start and rescanned every 1.5 seconds, so changes from scripts, builds and your editor show up too.
@@ -25,7 +33,7 @@ This is Rolle's fork of [GrzeskoByte/claude-work-visualized](https://github.com/
 - **Code view.** Each `Edit` and `Write`, and each file a shell command changes (`sed -i`, `>`, `tee`, a script that rewrites a file it names), is replayed as keystrokes: replaced lines turn red and fold away, new lines type in behind a caret, and gutter marks stay for a while. Highlighting covers about 60 languages through Prism, in Tokyo Night colours.
 - **Quiet chat.** While the pane is shown, an edit's result in the chat is one line (`± Edited src/app.ts +3 -1`), because the pane already shows the diff.
 - **Remote work.** Files touched over `ssh`, `scp` and `rsync` show under a folder per host (`deploy@web1:/etc/nginx/…`), and the header names the host Claude is working on.
-- **Live thinking.** Claude's thinking types itself out under the prompt line at a pace you can read (a wave of dots and a seconds count hold its place until the words arrive), with a blinking cursor, in up to 12 lines. Scroll over it to read back. It stays until 20 seconds after the turn ends. Needs `"showThinkingSummaries": true` in `~/.claude/settings.json`: without it Claude Code receives thinking with no text.
+- **Live thinking.** Claude's thinking types itself out under the prompt line at a pace you can read (a wave of dots and a seconds count hold its place until the words arrive), with a blinking cursor, in up to 12 lines. Each new thought goes on under the last, and nothing is taken away until the turn ends, so scroll over it to read back through the whole turn's thinking. It stays until 20 seconds after the turn ends. Needs `"showThinkingSummaries": true` in `~/.claude/settings.json`: without it Claude Code receives thinking with no text.
 - **Git graph.** When Claude runs `git` or `gh`, a small branch graph appears under the prompt line: checkouts move the `◉` HEAD marker, new commits pop in, merges light up the joining lines, pushes and pulls count commits ahead and behind, the prompt line names the action as it runs (`❯ committing Add notes 0.4s`) with the commit's message waiting green above HEAD, and `gh pr create` / `gh pr merge` show a PR card for 20 seconds, then just `#7 open` in the graph's title (`/prs` hides them). It stays for a minute after the last git command.
 - **Completion card.** When a turn ends, a card counts the files viewed, edited, created and deleted.
 - **Terminal friendly.** One-cell glyphs and box-drawing characters only, up to 30 fps while something moves, idle otherwise.
