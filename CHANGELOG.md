@@ -1,3 +1,7 @@
+### 0.5.4: 2026-10-20
+
+* Fix thinking stuck while scrolled back
+
 ### 0.5.3: 2026-10-20
 
 * Fix thinking title blinking between tool calls

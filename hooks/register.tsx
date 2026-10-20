@@ -677,7 +677,7 @@ export const register: Register = on => {
       typed = { key: th.key, n: typeTo(typed.n, th.dropped + th.text.length, Math.min(250, now - typed.at), pace), at: now }
     }
     // A scrolled thought stays put until a new one starts or the person leaves it a while.
-    if (thinkBrowse !== undefined && (th === null || turnOf(thinkBrowse.key) !== turnOf(th.key) || now - thinkBrowse.at > HOLD)) thinkBrowse = undefined
+    if (thinkBrowse !== undefined && (th === null || thinkBrowse.key !== th.key || now - thinkBrowse.at > HOLD)) thinkBrowse = undefined
     const sessionRoot = (await $.session.cwd()).replace(/\/+$/, '')
     const root = sessionRoot.split('/').pop() ?? ''
     const paneColumns = Math.max(24, (e.props.bodyColumns ?? 40) - 1)
@@ -716,7 +716,8 @@ export const register: Register = on => {
      * while Claude works, it says it only once the turn is over.
      */
     function thinkingSection(columns: number, rows: number, at: { column: number; row: number }, place: 'beside' | 'stacked') {
-      const think = thoughtView({ thought: th, typed: typed.n, now, turn: info, columns, rows, top: thinkBrowse?.top })
+      // One of the rows goes to the empty row under the rule.
+      const think = thoughtView({ thought: th, typed: typed.n, now, turn: info, columns, rows: Math.max(1, rows - 1), top: thinkBrowse?.top })
       thinkTop = think.top
       // Scrolled back down to the end: follow the typing again.
       if (thinkBrowse !== undefined && think.below === 0) thinkBrowse = undefined

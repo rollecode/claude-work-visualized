@@ -935,3 +935,50 @@ test('the thinking title stays put while calls come and go', async ($, on) => {
   await reading
   expect(await titles()).toBe(true)
 })
+
+test('a new thought ends scrolling back, so the pane shows what Claude thinks now', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', () => ({ value: [] }))
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('ui.scroll', () => ({}) as never)
+  on('turn.step', async function* (_$, e) {
+    yield { kind: 'thinking', index: 0, text: e.index === 0 ? 'Old idea. ' + 'more '.repeat(400) : 'Newest plan.' }
+    yield { kind: 'text', index: 1, text: 'x' }
+    return { turnId: 't1', index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await $.turn.start({ turnId: 't1', source: 'prompt' } as never).catch(() => undefined)
+  const drain = async (s: ReturnType<typeof $.turn.step>) => {
+    for (let step = await s.next(); step.done !== true; step = await s.next()) {}
+  }
+  const mount = () => $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  // The pane types only while it is drawn, so it stays mounted while the clock moves.
+  let ui = await mount()
+  const shown = async () => {
+    await ui.unmount()
+    ui = await mount()
+    return (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  }
+  await drain($.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 }))
+  await clock.advance(10_000)
+  await $.ui.scroll({ component: 'Pane', requestId: 'work-map', by: -80, offset: 0, bodyRows: 30, contentRows: 30, origin: { kind: 'person' }, pointer: { column: 60, row: 3 } } as never)
+  expect(await shown()).toContain('Old idea.')
+
+  await drain($.turn.step({ turnId: 't1', index: 1, model: 'm', messageCount: 2 }))
+  await clock.advance(2000)
+  const now = await shown()
+  await ui.unmount()
+  expect(now).toContain('Newest plan.')
+  expect(now).not.toContain('↓')
+})
