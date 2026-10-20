@@ -982,3 +982,48 @@ test('a new thought ends scrolling back, so the pane shows what Claude thinks no
   expect(now).toContain('Newest plan.')
   expect(now).not.toContain('↓')
 })
+
+test('a new turn starts without the last turn\'s thought', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', () => ({ value: [] }))
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('turn.step', async function* (_$, e) {
+    if (e.turnId === 't1') yield { kind: 'thinking', index: 0, text: 'Old thought.' }
+    yield { kind: 'text', index: 1, text: 'x' }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  const drain = async (s: ReturnType<typeof $.turn.step>) => {
+    for (let step = await s.next(); step.done !== true; step = await s.next()) {}
+  }
+  const mount = () => $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  // The pane types only while it is drawn, so it stays mounted while the clock moves.
+  let ui = await mount()
+  const shown = async () => {
+    await ui.unmount()
+    ui = await mount()
+    return (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  }
+  await $.turn.start({ turnId: 't1', source: 'prompt' } as never).catch(() => undefined)
+  await drain($.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 }))
+  await clock.advance(2000)
+  expect(await shown()).toContain('Old thought.')
+
+  await $.turn.start({ turnId: 't2', source: 'prompt' } as never).catch(() => undefined)
+  await drain($.turn.step({ turnId: 't2', index: 0, model: 'm', messageCount: 2 }))
+  await clock.advance(500)
+  const now = await shown()
+  await ui.unmount()
+  expect(now).not.toContain('Old thought.')
+})

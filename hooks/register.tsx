@@ -24,6 +24,7 @@ const MAX_ENTRIES = 2000
 const MAX_DEPTH = 12
 const FRAME_MS = 33 // ~30 fps while anything moves, the terminal's cap for a shown pane
 const POLL_MS = 1500 // how often the project is rescanned for changes made outside tool calls
+const CLOCK_STALE = 2000 // a frame clock this quiet has been cancelled
 const SPLIT_COLUMNS = 84 // from this wide thinking, git and the code view sit beside the tree, else above and under it
 const EDITORS = new Set(['Edit', 'MultiEdit', 'Write'])
 const MAX_REPLAYS = 4 // files of one tool call the code view checks and replays
@@ -55,6 +56,8 @@ let thinkArea: CodeArea | undefined // where the thinking section was drawn last
 let thinkTop = 0 // the thought's first line shown last frame
 let writing: { tool: string; bytes: number; at: number } | undefined // a tool call the model is still writing
 let animateUntil = 0
+let clocks: { cancel: () => void }[] = []
+let lastTick = -Infinity // when the frame clock last ticked
 let isWatching = true // mirrors the watching atom for synchronous checks
 let home: string | undefined
 let chatDiffs: ChatDiffs = 'quiet'
@@ -287,6 +290,71 @@ function startAnimating(now: number) {
   animateUntil = Math.max(animateUntil, now + T.trail + 2000)
 }
 
+/**
+ * Starts the frame and rescan clocks, and again whenever they have stopped ticking:
+ * a hot reload cancels a plugin's timers without always running session.start again.
+ */
+function keepClocks($: EngineInterface, now: number) {
+  if (now >= lastTick && now - lastTick < CLOCK_STALE) return
+  clocks.forEach(c => c.cancel())
+  lastTick = now
+
+  // The frame clock: redraws while anything moves, and tidies spent state.
+  let lastTidy = 0
+  const frames = $.clock.every(FRAME_MS, () => {
+    void (async () => {
+      const t = await $.clock.now()
+      lastTick = t
+      if (!(await read($, watching))) return
+      if (t < animateUntil) $.ui.invalidate('ui.render')
+      if (t - lastTidy < 1000) return
+      lastTidy = t
+      const g = await read($, ghosts)
+      if (Object.values(g).some(x => t - x.at >= T.ghostGone + 200)) {
+        await update($, ghosts, map => Object.fromEntries(Object.entries(map).filter(([, x]) => t - x.at < T.ghostGone + 200)))
+      }
+      const a = await read($, activity)
+      const stale = staleKeys(a, t)
+      if (stale.length > 0) {
+        await update($, activity, map => {
+          const out = { ...map }
+          for (const p of stale) delete out[p]
+          return out
+        })
+      }
+      const c = await read($, clips)
+      const isKept = (x: Clip) => !isClipDone(x, t) || isBrowsed(x, t)
+      if (c.some(x => !isKept(x))) await update($, clips, list => list.filter(isKept))
+      const isGitShown = gitFade(await read($, git), t) < 1
+      // A long run keeps drawing; once nothing moves the clock winds down.
+      if (isAnimating(a, g, await read($, turn), t, await read($, thought)) || isGitShown) startAnimating(t)
+      else if (t > animateUntil - T.trail) animateUntil = Math.min(animateUntil, t + 1500)
+    })()
+  })
+
+  // Live sync with the disk: files changed by anything (a script, a build,
+  // another editor) show up without waiting for a tool call to end.
+  let polling = false
+  const polls = $.clock.every(POLL_MS, () => {
+    if (polling) return
+    polling = true
+    void (async () => {
+      if (!(await read($, watching))) return
+      await rescan($, new Set(), 'poll')
+      // A long command (a script that commits, a slow push) shows its commits as they land.
+      const gs = await read($, git)
+      if (gs === null || gs.endedAt !== undefined) return
+      const fresh = await readGit($, gs.dir, gs.refs)
+      const polledAt = await $.clock.now()
+      if (fresh !== undefined) await update($, git, s => (s === null || s.endedAt !== undefined || s.dir !== gs.dir ? s : gitRead(s, fresh, polledAt)))
+    })().finally(() => {
+      polling = false
+    })
+  })
+
+  clocks = [frames, polls]
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     home = await $.env.get('HOME').catch(() => undefined)
@@ -313,57 +381,7 @@ export const register: Register = on => {
     void rescan($, new Set(), 'poll')
     if (isOn) void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
 
-    // The frame clock: redraws while anything moves, and tidies spent state.
-    let lastTidy = 0
-    $.clock.every(FRAME_MS, () => {
-      void (async () => {
-        if (!(await read($, watching))) return
-        const t = await $.clock.now()
-        if (t < animateUntil) $.ui.invalidate('ui.render')
-        if (t - lastTidy < 1000) return
-        lastTidy = t
-        const g = await read($, ghosts)
-        if (Object.values(g).some(x => t - x.at >= T.ghostGone + 200)) {
-          await update($, ghosts, map => Object.fromEntries(Object.entries(map).filter(([, x]) => t - x.at < T.ghostGone + 200)))
-        }
-        const a = await read($, activity)
-        const stale = staleKeys(a, t)
-        if (stale.length > 0) {
-          await update($, activity, map => {
-            const out = { ...map }
-            for (const p of stale) delete out[p]
-            return out
-          })
-        }
-        const c = await read($, clips)
-        const isKept = (x: Clip) => !isClipDone(x, t) || isBrowsed(x, t)
-        if (c.some(x => !isKept(x))) await update($, clips, list => list.filter(isKept))
-        const isGitShown = gitFade(await read($, git), t) < 1
-        // A long run keeps drawing; once nothing moves the clock winds down.
-        if (isAnimating(a, g, await read($, turn), t, await read($, thought)) || isGitShown) startAnimating(t)
-        else if (t > animateUntil - T.trail) animateUntil = Math.min(animateUntil, t + 1500)
-      })()
-    })
-
-    // Live sync with the disk: files changed by anything (a script, a build,
-    // another editor) show up without waiting for a tool call to end.
-    let polling = false
-    $.clock.every(POLL_MS, () => {
-      if (polling) return
-      polling = true
-      void (async () => {
-        if (!(await read($, watching))) return
-        await rescan($, new Set(), 'poll')
-        // A long command (a script that commits, a slow push) shows its commits as they land.
-        const gs = await read($, git)
-        if (gs === null || gs.endedAt !== undefined) return
-        const fresh = await readGit($, gs.dir, gs.refs)
-        const polledAt = await $.clock.now()
-        if (fresh !== undefined) await update($, git, s => (s === null || s.endedAt !== undefined || s.dir !== gs.dir ? s : gitRead(s, fresh, polledAt)))
-      })().finally(() => {
-        polling = false
-      })
-    })
+    keepClocks($, now)
 
     return next(e)
   })
@@ -435,8 +453,12 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
     const now = await $.clock.now()
     await update($, turn, () => ({ ...emptyTurn(), phase: 'working' as const, at: now }))
+    // The last turn's thought isn't this turn's thinking.
+    await update($, thought, () => null)
+    keepClocks($, now)
     startAnimating(now)
     return next(e)
   })
@@ -455,6 +477,7 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined || !isWatching) return yield* next(e)
     const begun = await $.clock.now()
+    keepClocks($, begun)
     await update($, thought, t => ({ ...(t ?? { key: '', text: '', dropped: 0, at: begun, endedAt: begun }), waitingSince: begun }))
     startAnimating(begun)
     const stream = next(e)
@@ -512,6 +535,7 @@ export const register: Register = on => {
     const targets = await targetsOf($, tool, input, cwd).catch(() => [] as Located[])
 
     const startedAt = await $.clock.now()
+    keepClocks($, startedAt)
     startAnimating(startedAt)
     // Work that names no file still shows on the prompt line while it runs.
     const doing = targets.length === 0 ? { text: doingOf(tool, input), at: startedAt } : undefined

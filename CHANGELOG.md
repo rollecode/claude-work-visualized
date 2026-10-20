@@ -1,3 +1,8 @@
+### 0.5.5: 2026-10-20
+
+* Fix last turn's thinking showing in a new one
+* Fix pane freezing after a plugin reload
+
 ### 0.5.4: 2026-10-20
 
 * Fix thinking stuck while scrolled back
