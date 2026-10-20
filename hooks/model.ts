@@ -1111,7 +1111,7 @@ export function statusLine(
 
 // ---------------------------------------------------------------- thinking
 
-const THOUGHT_KEEP = 4000 // characters of a thinking block kept for the typewriter
+const THOUGHT_KEEP = 24_000 // characters of a turn's thinking kept, for scrolling back
 const THOUGHT_ROWS_MIN = 4
 const THOUGHT_ROWS_MAX = 12
 const THOUGHT_SHARE = 0.3 // of the pane's height
@@ -1119,14 +1119,24 @@ const TYPE_CPS = 35 // a reading pace, characters a second
 const TYPE_LATE = 3 // how much faster text is typed once the thought has ended
 const TYPE_LAG = 400 // characters behind the stream before typing speeds up
 
-/** Appends a streamed piece of thinking; a new `key` starts a new thought. */
+/** The turn a thought key (`turn:step:block`) belongs to. */
+export const turnOf = (key: string) => key.split(':')[0] ?? key
+
+/**
+ * Appends a streamed piece of thinking. A new block in the same turn goes on under the
+ * last one, so the turn's thoughts can be read back; a new turn starts over.
+ */
 export function withThought(thought: Thought | null, key: string, piece: string, now: number): Thought {
   const same = thought !== null && thought.key === key
+  const sameTurn = thought !== null && thought.text !== '' && turnOf(thought.key) === turnOf(key)
   // Emoji can be two cells wide, so they are dropped like everywhere else in the pane.
-  const clean = piece.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '')
-  const joined = (same ? thought.text + clean : clean.trimStart()).replace(/\s+/g, ' ')
+  const clean = piece.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').replace(/\s+/g, ' ')
+  let joined: string
+  if (same) joined = thought.text.endsWith(' ') ? thought.text + clean.trimStart() : thought.text + clean
+  else if (sameTurn) joined = thought.text.trimEnd() + '\n' + clean.trimStart()
+  else joined = clean.trimStart()
   const cut = Math.max(0, joined.length - THOUGHT_KEEP)
-  return { key, text: joined.slice(cut), dropped: (same ? thought.dropped : 0) + cut, at: now }
+  return { key, text: joined.slice(cut), dropped: (same || sameTurn ? thought.dropped : 0) + cut, at: now }
 }
 
 /** `reading` while the thought streams; `late` once it has ended and the text still has to catch up. */
@@ -1140,8 +1150,9 @@ export function typeTo(typed: number, total: number, dt: number, pace: TypePace 
   return Math.min(total, typed + (cps * rush * dt) / 1000)
 }
 
-/** Greedy word wrap; a word longer than the line is broken. */
+/** Greedy word wrap, a new line per paragraph; a word longer than the line is broken. */
 export function wrapWords(text: string, width: number): string[] {
+  if (text.includes('\n')) return text.split('\n').flatMap(p => wrapWords(p, width))
   const lines: string[] = []
   let line = ''
   for (const word of text.split(' ')) {
@@ -1202,13 +1213,18 @@ export function thoughtView(scene: ThoughtScene): ThoughtView {
   const fade = top === undefined ? thoughtFade(thought, typed, now, turn) : 0
   const none = { lines: [], top: 0, above: 0, below: 0, fade: 1 }
   if (thought === null) return none
-  // Thinking text comes late, or never without `showThinkingSummaries`: this line holds its place.
+  // Thinking text comes late, or never without `showThinkingSummaries`: a line of dots holds
+  // its place, under the turn's earlier thoughts so they stay readable meanwhile.
   if (thought.waitingSince !== undefined) {
     // A wave of dots rather than a word: the prompt line and the rule already say thinking.
     const dots = '• • • • •'
     const wave = (i: number) => band(i, ((now / 90) % (dots.length + 6)) - 3, 2.5)
     const waited = Math.floor(Math.max(0, now - thought.waitingSince) / 1000)
-    return { ...none, fade: 0, waited, lines: [[{ t: ' ' }, ...paint(dots, i => ({ c: mix(FAINT, CLAUDE, wave(i)) }))]] }
+    const dotLine: Seg[] = [{ t: ' ' }, ...paint(dots, i => ({ c: mix(FAINT, CLAUDE, wave(i)) }))]
+    if (thought.text === '' || rows < 2) return { ...none, fade: 0, waited, lines: [dotLine] }
+    const { waitingSince: _, ...settled } = thought
+    const before = thoughtView({ ...scene, thought: settled, rows: rows - 1, turn: { ...turn, phase: 'working' } })
+    return { ...before, fade: 0, waited, lines: [...before.lines, dotLine] }
   }
   if (thought.text === '' || fade >= 1) return none
   const total = thought.dropped + thought.text.length

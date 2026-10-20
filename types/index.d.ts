@@ -48,11 +48,11 @@ export type Clip = {
   changed: number[]
 }
 
-/** The thinking block streaming now, or the last one, as one line of text. */
+/** The turn's thinking so far: each block a paragraph, the one streaming now last. */
 export type Thought = {
-  /** Which block this is: a new key starts the typewriter over. */
+  /** The block streaming now (`turn:step:block`): a new turn starts the text over. */
   key: string
-  /** Whitespace collapsed to single spaces; only the tail is kept. */
+  /** Whitespace collapsed to single spaces, blocks separated by `\n`; only the tail is kept. */
   text: string
   /** Characters cut from the front of `text` to keep it short. */
   dropped: number

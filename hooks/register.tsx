@@ -14,7 +14,7 @@ import type { GitRead, PrShown } from './git'
 import {
   CLAUDE, COLOR, FAINT, ICON, IGNORED, LABEL, MUTED, T,
   baseName, buildRows, classifyBash, heldFocusOf, counted, doingOf, mentionsOf, diffTrees, emptyTurn, focusOf, headerLine, isAnimating, isUnscanned, legendLines, mix, remoteOf,
-  placeOf, remotePath, scrollTo, staleKeys, statusLine, summaryLines, thoughtRows, thoughtView, typeTo, withPath, withThought, withoutPath,
+  placeOf, remotePath, scrollTo, staleKeys, statusLine, summaryLines, thoughtRows, thoughtView, turnOf, typeTo, withPath, withThought, withoutPath,
 } from './model'
 import type { FolderMemory, Seg, Target } from './model'
 
@@ -649,7 +649,7 @@ export const register: Register = on => {
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     const th = await read($, thought)
     if (th !== null && thinkArea !== undefined && e.pointer !== undefined && isOverCode(e.pointer, thinkArea)) {
-      const from = thinkBrowse?.key === th.key ? thinkBrowse.top : thinkTop
+      const from = thinkBrowse !== undefined && turnOf(thinkBrowse.key) === turnOf(th.key) ? thinkBrowse.top : thinkTop
       thinkBrowse = { key: th.key, top: Math.max(0, from + e.by * WHEEL_LINES), at: await $.clock.now() }
       $.ui.invalidate('ui.render')
       return {}
@@ -671,12 +671,13 @@ export const register: Register = on => {
     const th = await read($, thought)
     const gs = await read($, git)
     if (th !== null) {
-      if (th.key !== typed.key) typed = { key: th.key, n: th.dropped, at: now }
+      // A new block in the same turn types on from where the last left off; a new turn starts over.
+      if (turnOf(th.key) !== turnOf(typed.key)) typed = { key: th.key, n: th.dropped, at: now }
       const pace = th.endedAt === undefined ? 'reading' : 'late'
       typed = { key: th.key, n: typeTo(typed.n, th.dropped + th.text.length, Math.min(250, now - typed.at), pace), at: now }
     }
     // A scrolled thought stays put until a new one starts or the person leaves it a while.
-    if (thinkBrowse !== undefined && (th === null || thinkBrowse.key !== th.key || now - thinkBrowse.at > HOLD)) thinkBrowse = undefined
+    if (thinkBrowse !== undefined && (th === null || turnOf(thinkBrowse.key) !== turnOf(th.key) || now - thinkBrowse.at > HOLD)) thinkBrowse = undefined
     const sessionRoot = (await $.session.cwd()).replace(/\/+$/, '')
     const root = sessionRoot.split('/').pop() ?? ''
     const paneColumns = Math.max(24, (e.props.bodyColumns ?? 40) - 1)

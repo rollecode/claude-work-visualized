@@ -1,3 +1,7 @@
+### 0.5.2: 2026-10-20
+
+* Keep the turn's thinking, scroll back through it
+
 ### 0.5.1: 2026-10-19
 
 * Fix thinking flashing between tool calls

@@ -597,12 +597,15 @@ test('a copy fills its row as the file lands, a glob lights what it matches, a s
   expect(await pane()).toContain('✓ index.ts')
 })
 
-test('thinking is kept as one line, a new block starting over', async () => {
-  const a = withThought(null, 'k1', '  Let me\n\nlook', 0)
+test('thinking is kept as one line, a new block in the turn going on under it, a new turn starting over', async () => {
+  const a = withThought(null, 't1:0:0', '  Let me\n\nlook', 0)
   expect(a.text).toBe('Let me look')
-  const b = withThought(a, 'k1', ' at  this.', 10)
+  const b = withThought(a, 't1:0:0', ' at  this.', 10)
   expect(b.text).toBe('Let me look at this.')
-  expect(withThought(b, 'k2', 'Next.', 20)).toEqual({ key: 'k2', text: 'Next.', dropped: 0, at: 20 })
+  const c = withThought(b, 't1:1:0', 'Next.', 20)
+  expect(c).toEqual({ key: 't1:1:0', text: 'Let me look at this.\nNext.', dropped: 0, at: 20 })
+  expect(wrapWords(c.text, 40)).toEqual(['Let me look at this.', 'Next.'])
+  expect(withThought(c, 't2:0:0', 'Fresh.', 30)).toEqual({ key: 't2:0:0', text: 'Fresh.', dropped: 0, at: 30 })
 })
 
 test('the typewriter keeps a reading pace and speeds up only when far behind', async () => {
@@ -640,9 +643,12 @@ test('thinking wraps, shows a share of the pane, scrolls, and fades a while afte
   expect(at(2000 + T.thoughtLinger + T.thoughtFade + 1)).toEqual([])
   expect(at(2000 + T.thoughtLinger + T.thoughtFade + 1).length).toBe(0)
   const waiting = { ...done, waitingSince: 0 }
-  const held = thoughtView({ thought: waiting, typed: 0, now: 4200, turn: working, columns: 40, rows: 4 })
-  expect(text(held.lines.flat())).toBe(' • • • • •')
+  // The dots go under the thoughts so far, which stay readable while the next one is awaited.
+  const held = thoughtView({ thought: waiting, typed: 5, now: 4200, turn: working, columns: 40, rows: 4 })
+  expect(held.lines.map(l => text(l))).toEqual([' Done.', ' • • • • •'])
   expect(held.waited).toBe(4)
+  const fresh = thoughtView({ thought: { ...waiting, text: '' }, typed: 0, now: 4200, turn: working, columns: 40, rows: 4 })
+  expect(text(fresh.lines.flat())).toBe(' • • • • •')
   expect(thoughtView({ thought: withThought(null, 'k', '', 0), typed: 0, now: 100, turn: working, columns: 40, rows: 4 }).lines).toEqual([])
 })
 

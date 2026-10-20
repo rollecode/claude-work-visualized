@@ -115,9 +115,11 @@ stays a minute after the last git command, then fades over 1.5 s.
   thought back. Whitespace is collapsed, older lines are dimmer and the newest
   letters bright at a blinking `▏` cursor. The section is 30 % of the pane's height, 4 to 12 lines,
   with `↑N` / `↓N` for lines out of view. The wheel over the section scrolls the
-  thought; it stays where you left it for 20 s, or until you scroll back to the end. The thought
-  stays for the whole turn and 20 s after it, then fades over 1.5 s. A new thinking block starts it
-  over.
+  thought; it stays where you left it for 20 s, or until you scroll back to the end. Each new
+  thinking block in a turn goes on as a new paragraph under the last, and the dots that wait for
+  the next one sit under what was thought so far, so nothing is taken away mid-turn: the whole
+  turn's thinking (the last 24,000 characters) can be scrolled back through. It stays for the
+  whole turn and 20 s after it, then fades over 1.5 s. A new turn starts it over.
 - **Section rules:** `── tree ──` (with `↑N` when scrolled) and `── legend ──`.
 - **Completion card:** a rounded box whose border fades in. `✓ TASK COMPLETE` appears letter by
   letter, then one row per operation slides in about 120 ms apart, its count and `━━━` bar
