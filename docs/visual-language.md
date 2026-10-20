@@ -106,8 +106,8 @@ stays a minute after the last git command, then fades over 1.5 s.
   - idle: `❯ idle · N files █`
   - The block cursor always blinks.
 - **Thinking:** while Claude thinks, a `── thinking ──` section under the prompt line types the
-  thought out at a reading pace of 35 characters a second. It only speeds up once it is more than
-  400 characters behind the stream, or to 3 times the pace once the thought has ended. Until the
+  thought out at a reading pace of 35 characters a second, or 3 times that once the thought has ended.
+  It never trails the stream by more than 120 characters, so the newest words stay in view. Until the
   first words arrive, from the moment a model request starts, the section shows a wave of dots
   `• • • • •` and the prompt line counts the seconds, `❯ thinking 4s █`. The section's title never changes with the prompt line, so it
   doesn't blink: beside the tree it is always `── thinking ──`; right under the prompt line, which says

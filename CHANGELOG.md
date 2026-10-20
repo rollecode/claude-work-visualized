@@ -1,3 +1,7 @@
+### 0.5.7: 2026-10-20
+
+* Fix long thoughts hiding the newest lines
+
 ### 0.5.6: 2026-10-20
 
 * Fix thinking stopping after a plugin reload

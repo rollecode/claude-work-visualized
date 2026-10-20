@@ -1117,7 +1117,7 @@ const THOUGHT_ROWS_MAX = 12
 const THOUGHT_SHARE = 0.3 // of the pane's height
 const TYPE_CPS = 35 // a reading pace, characters a second
 const TYPE_LATE = 3 // how much faster text is typed once the thought has ended
-const TYPE_LAG = 400 // characters behind the stream before typing speeds up
+const TYPE_BEHIND = 120 // characters the typing may trail the stream, so the newest thought stays in view
 
 /** The turn a thought key (`turn:step:block`) belongs to. */
 export const turnOf = (key: string) => key.split(':')[0] ?? key
@@ -1142,12 +1142,11 @@ export function withThought(thought: Thought | null, key: string, piece: string,
 /** `reading` while the thought streams; `late` once it has ended and the text still has to catch up. */
 export type TypePace = 'reading' | 'late'
 
-/** Moves the typewriter on by `dt` ms at its pace, speeding up only once far behind. */
+/** Moves the typewriter on by `dt` ms at its pace, never more than TYPE_BEHIND short of the stream. */
 export function typeTo(typed: number, total: number, dt: number, pace: TypePace = 'reading'): number {
   if (typed >= total) return total
-  const rush = 1 + Math.max(0, total - typed - TYPE_LAG) / TYPE_LAG
   const cps = TYPE_CPS * (pace === 'late' ? TYPE_LATE : 1)
-  return Math.min(total, typed + (cps * rush * dt) / 1000)
+  return Math.min(total, Math.max(total - TYPE_BEHIND, typed + (cps * dt) / 1000))
 }
 
 /** Greedy word wrap, a new line per paragraph; a word longer than the line is broken. */

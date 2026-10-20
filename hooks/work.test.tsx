@@ -612,7 +612,10 @@ test('the typewriter keeps a reading pace and speeds up only when far behind', a
   expect(typeTo(0, 100, 1000)).toBe(35)
   expect(typeTo(0, 4000, 1000)).toBeGreaterThan(300)
   expect(typeTo(5, 5, 33)).toBe(5)
-  expect(typeTo(0, 300, 1000, 'late')).toBe(105)
+  expect(typeTo(0, 100, 500, 'late')).toBe(52.5)
+  // However long the thought grows, the typing stays within a line or two of its end.
+  expect(typeTo(0, 4000, 33)).toBeGreaterThanOrEqual(4000 - 120)
+  expect(typeTo(3000, 9000, 33)).toBeGreaterThanOrEqual(9000 - 120)
 })
 
 test('thinking wraps, shows a share of the pane, scrolls, and fades a while after the turn', async () => {

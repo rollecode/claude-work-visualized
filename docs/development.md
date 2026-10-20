@@ -82,7 +82,7 @@ with results wrapped as `{ value }` (for example `on('fs.list', () => ({ value: 
 | To change | Edit |
 | --- | --- |
 | Timings (fade, deletion, card, thinking) | `T` in `hooks/model.ts` |
-| Thinking typing speed and section height | `TYPE_CPS`, `TYPE_LAG`, `TYPE_LATE`, `THOUGHT_ROWS_MIN`, `THOUGHT_ROWS_MAX`, `THOUGHT_SHARE` in `hooks/model.ts` |
+| Thinking typing speed and section height | `TYPE_CPS`, `TYPE_BEHIND`, `TYPE_LATE`, `THOUGHT_ROWS_MIN`, `THOUGHT_ROWS_MAX`, `THOUGHT_SHARE` in `hooks/model.ts` |
 | Colours, glyphs, labels | `COLOR`, `HOT`, `TINT`, `ICON`, `LABEL`, `VERB` in `hooks/model.ts` |
 | Ignored folders | `IGNORED` in `hooks/model.ts` |
 | Frame rate, rescan interval, scan limits | `FRAME_MS`, `POLL_MS`, `MAX_ENTRIES`, `MAX_DEPTH` in `hooks/register.tsx` |
