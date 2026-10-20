@@ -2,6 +2,7 @@
 
 * Keep the turn's thinking, scroll back through it
 * Separate thoughts with empty lines, one after the last
+* Let thinking fill the side column when alone
 
 ### 0.5.1: 2026-10-19
 

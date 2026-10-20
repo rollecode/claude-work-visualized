@@ -766,10 +766,10 @@ export const register: Register = on => {
     if (isSplit) {
       const treeColumns = Math.max(30, Math.min(48, Math.floor(paneColumns * 0.4)))
       const sideColumns = paneColumns - treeColumns - 2
-      // With an edit to show, thinking and git leave the code view most of the column.
-      const share = clip === undefined ? 0.45 : 0.25
-      const thinking = thinkingSection(sideColumns, Math.max(3, Math.floor(height * share)), { column: treeColumns + 2, row: 0 })
-      const gitPart = gitSection(sideColumns, Math.max(4, Math.floor(height * share)))
+      // Thinking takes the whole column when it is alone, half of it next to an edit or git.
+      const isShared = clip !== undefined || hasGit
+      const thinking = thinkingSection(sideColumns, Math.max(3, (isShared ? Math.floor(height / 2) : height) - 1), { column: treeColumns + 2, row: 0 })
+      const gitPart = gitSection(sideColumns, Math.max(4, clip === undefined ? height - 1 - thinking.rows : Math.floor(height * 0.25)))
       const codeRows = Math.max(3, height - 1 - thinking.rows - gitPart.rows)
       codeArea = clip === undefined ? undefined : { column: treeColumns + 2, row: thinking.rows + gitPart.rows, columns: sideColumns, rows: codeRows + 1 }
       return (

@@ -806,7 +806,7 @@ test('a wide pane puts the thought beside the tree, where the wheel scrolls it',
   on('ui.status', () => ({ value: undefined }) as never)
   on('ui.scroll', () => ({}) as never)
   on('turn.step', async function* () {
-    yield { kind: 'thinking', index: 0, text: 'First idea. ' + 'more '.repeat(300) }
+    yield { kind: 'thinking', index: 0, text: 'First idea. ' + 'more '.repeat(600) }
     return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
   })
   await $.session.start({ source: 'startup', cwd: ROOT } as never)
