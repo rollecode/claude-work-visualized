@@ -1232,9 +1232,11 @@ export function thoughtView(scene: ThoughtScene): ThoughtView {
   const shown = thought.text.slice(0, Math.max(0, Math.floor(typed) - thought.dropped))
   const all = wrapWords(shown, Math.max(1, columns - 2))
   if (all.length === 0) all.push('')
-  const last = Math.max(0, all.length - rows)
+  // One row stays empty under the last line, apart from what follows.
+  const room = rows > 1 ? rows - 1 : rows
+  const last = Math.max(0, all.length - room)
   const first = top === undefined ? last : Math.min(top, last)
-  const lines = all.slice(first, first + rows)
+  const lines = all.slice(first, first + room)
   const faded = (c: string) => mix(c, FAINT, fade)
   const segs = lines.map((text, i) => {
     const isEdge = first + i === all.length - 1 && isTyping
@@ -1249,6 +1251,7 @@ export function thoughtView(scene: ThoughtScene): ThoughtView {
     if (isEdge) row.push({ t: '▏', c: mix(CLAUDE, FAINT, pulse(now, 1060)) })
     return row
   })
+  if (room < rows) segs.push([])
   return { lines: segs, top: first, above: first, below: all.length - first - lines.length, fade }
 }
 

@@ -628,7 +628,8 @@ test('thinking wraps, shows a share of the pane, scrolls, and fades a while afte
   expect(view().below).toBe(0)
   expect(view().above).toBeGreaterThan(0)
   for (const l of view().lines) expect(text(l).length).toBeLessThanOrEqual(30)
-  expect(text(view().lines[3] ?? [])).toContain('▏')
+  expect(text(view().lines[2] ?? [])).toContain('▏')
+  expect(view().lines[3]).toEqual([])
   expect(view(0).above).toBe(0)
   expect(view(0).below).toBeGreaterThan(0)
   expect(view(999).below).toBe(0)
@@ -638,14 +639,14 @@ test('thinking wraps, shows a share of the pane, scrolls, and fades a while afte
   const ended: ReturnType<typeof emptyTurn> = { ...emptyTurn(), phase: 'complete', at: 2000 }
   const at = (now: number, turn = ended) => thoughtView({ thought: done, typed: 5, now, turn, columns: 40, rows: 4 }).lines
   expect(text(at(2000).flat())).toBe(' Done.')
-  expect(at(60_000, working).length).toBe(1)
-  expect(at(2000 + T.thoughtLinger - 1).length).toBe(1)
+  expect(at(60_000, working).length).toBe(2)
+  expect(at(2000 + T.thoughtLinger - 1).length).toBe(2)
   expect(at(2000 + T.thoughtLinger + T.thoughtFade + 1)).toEqual([])
   expect(at(2000 + T.thoughtLinger + T.thoughtFade + 1).length).toBe(0)
   const waiting = { ...done, waitingSince: 0 }
   // The dots go under the thoughts so far, which stay readable while the next one is awaited.
   const held = thoughtView({ thought: waiting, typed: 5, now: 4200, turn: working, columns: 40, rows: 4 })
-  expect(held.lines.map(l => text(l))).toEqual([' Done.', ' • • • • •'])
+  expect(held.lines.map(l => text(l))).toEqual([' Done.', '', ' • • • • •'])
   expect(held.waited).toBe(4)
   const fresh = thoughtView({ thought: { ...waiting, text: '' }, typed: 0, now: 4200, turn: working, columns: 40, rows: 4 })
   expect(text(fresh.lines.flat())).toBe(' • • • • •')

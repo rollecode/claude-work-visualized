@@ -1,7 +1,7 @@
 ### 0.5.2: 2026-10-20
 
 * Keep the turn's thinking, scroll back through it
-* Separate thoughts with an empty line
+* Separate thoughts with empty lines, one after the last
 
 ### 0.5.1: 2026-10-19
 
