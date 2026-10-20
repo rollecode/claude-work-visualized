@@ -374,7 +374,9 @@ export const register: Register = on => {
     chatDiffs = (await $.store.get('chatDiffs').catch(() => undefined)) === 'full' ? 'full' : 'quiet'
     const now = await $.clock.now()
     const stored = await $.store.get('watching').catch(() => undefined)
-    const isOn = stored !== false
+    // The setting is shared by every session; a reload finds this session's pane still open.
+    const isOpen = (await $.ui.panes().catch(() => [])).some(p => p.id === PANE)
+    const isOn = stored !== false || isOpen
     await update($, watching, () => isOn)
     isWatching = isOn
     startAnimating(now)

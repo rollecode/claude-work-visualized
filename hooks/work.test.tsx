@@ -1027,3 +1027,37 @@ test('a new turn starts without the last turn\'s thought', async ($, on) => {
   await ui.unmount()
   expect(now).not.toContain('Old thought.')
 })
+
+test('a reload with the pane open keeps watching, though another session switched it off', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on, { watching: false })
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', () => ({ value: [] }))
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('ui.panes', () => ({ value: [{ id: 'work-map', title: 'Claude Work', isShown: true, isFocused: false, isPlaced: true }] }) as never)
+  on('turn.step', async function* () {
+    yield { kind: 'thinking', index: 0, text: 'Still here.' }
+    return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await $.turn.start({ turnId: 't1', source: 'prompt' } as never).catch(() => undefined)
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 })
+  for (let step = await stream.next(); step.done !== true; step = await stream.next()) {}
+  const mount = () => $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  let ui = await mount()
+  await clock.advance(2000)
+  await ui.unmount()
+  ui = await mount()
+  const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
+  await ui.unmount()
+  expect(shown).toContain('Still here.')
+})

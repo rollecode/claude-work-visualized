@@ -1,3 +1,7 @@
+### 0.5.6: 2026-10-20
+
+* Fix thinking stopping after a plugin reload
+
 ### 0.5.5: 2026-10-20
 
 * Fix last turn's thinking showing in a new one
