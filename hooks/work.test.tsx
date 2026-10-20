@@ -597,14 +597,14 @@ test('a copy fills its row as the file lands, a glob lights what it matches, a s
   expect(await pane()).toContain('✓ index.ts')
 })
 
-test('thinking is kept as one line, a new block in the turn going on under it, a new turn starting over', async () => {
+test('thinking is kept as one line, a new block in the turn going on after an empty line, a new turn starting over', async () => {
   const a = withThought(null, 't1:0:0', '  Let me\n\nlook', 0)
   expect(a.text).toBe('Let me look')
   const b = withThought(a, 't1:0:0', ' at  this.', 10)
   expect(b.text).toBe('Let me look at this.')
   const c = withThought(b, 't1:1:0', 'Next.', 20)
-  expect(c).toEqual({ key: 't1:1:0', text: 'Let me look at this.\nNext.', dropped: 0, at: 20 })
-  expect(wrapWords(c.text, 40)).toEqual(['Let me look at this.', 'Next.'])
+  expect(c).toEqual({ key: 't1:1:0', text: 'Let me look at this.\n\nNext.', dropped: 0, at: 20 })
+  expect(wrapWords(c.text, 40)).toEqual(['Let me look at this.', '', 'Next.'])
   expect(withThought(c, 't2:0:0', 'Fresh.', 30)).toEqual({ key: 't2:0:0', text: 'Fresh.', dropped: 0, at: 30 })
 })
 

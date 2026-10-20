@@ -1133,7 +1133,7 @@ export function withThought(thought: Thought | null, key: string, piece: string,
   const clean = piece.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').replace(/\s+/g, ' ')
   let joined: string
   if (same) joined = thought.text.endsWith(' ') ? thought.text + clean.trimStart() : thought.text + clean
-  else if (sameTurn) joined = thought.text.trimEnd() + '\n' + clean.trimStart()
+  else if (sameTurn) joined = thought.text.trimEnd() + '\n\n' + clean.trimStart()
   else joined = clean.trimStart()
   const cut = Math.max(0, joined.length - THOUGHT_KEEP)
   return { key, text: joined.slice(cut), dropped: (same || sameTurn ? thought.dropped : 0) + cut, at: now }
@@ -1152,7 +1152,7 @@ export function typeTo(typed: number, total: number, dt: number, pace: TypePace 
 
 /** Greedy word wrap, a new line per paragraph; a word longer than the line is broken. */
 export function wrapWords(text: string, width: number): string[] {
-  if (text.includes('\n')) return text.split('\n').flatMap(p => wrapWords(p, width))
+  if (text.includes('\n')) return text.split('\n').flatMap(p => (p === '' ? [''] : wrapWords(p, width)))
   const lines: string[] = []
   let line = ''
   for (const word of text.split(' ')) {
