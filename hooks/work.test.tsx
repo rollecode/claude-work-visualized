@@ -316,7 +316,8 @@ test('a sed edit in another project shows in the tree and replays in the code vi
   const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
   expect(shown).toContain('~:/')
   expect(shown).toContain('hooks.php')
-  expect(shown).toContain('~:/other/inc/hooks.php:1')
+  // The code view's rule is a drag handle, drawn by its own Client.
+  expect((await ui.findAll({ type: 'Text', in: 'size:code' })).map(x => x.text).join('')).toContain('~:/other/inc/hooks.php:1')
   await ui.unmount()
 })
 
@@ -358,7 +359,8 @@ test('a changelog rewritten by a python heredoc replays in the code view', async
     props: { title: 'Claude Work', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 34 }, view: {} },
   })
   const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
-  expect(shown).toContain('~:/site/CHANGELOG.md:1')
+  // The code view's rule is a drag handle, drawn by its own Client.
+  expect((await ui.findAll({ type: 'Text', in: 'size:code' })).map(x => x.text).join('')).toContain('~:/site/CHANGELOG.md:1')
   expect(shown).toContain('CHANGELOG.md')
   await ui.unmount()
 })
@@ -1063,4 +1065,53 @@ test('a reload with the pane open keeps watching, though another session switche
   const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
   await ui.unmount()
   expect(shown).toContain('Still here.')
+})
+
+test('dragging the divider beside the tree resizes it, within limits, and the size is kept', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', () => ({ value: [] }))
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('turn.step', async function* () {
+    yield { kind: 'thinking', index: 0, text: 'Weighing the layout.' }
+    return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 })
+  for (let step = await stream.next(); step.done !== true; step = await stream.next()) {}
+
+  const mount = () => $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  const treeAt = async (ui: Awaited<ReturnType<typeof mount>>) => ((await ui.find({ key: 'size:tree' }))?.props as { props?: { at?: number } } | undefined)?.props?.at
+
+  const typing = await mount()
+  await clock.advance(5000)
+  await typing.unmount()
+  const ui = await mount()
+  expect(await treeAt(ui)).toBe(47)
+  await ui.pointer({ type: 'down', x: 0, y: 3, button: 'left', in: 'size:tree' })
+  await ui.pointer({ type: 'move', x: 10, y: 3, button: 'left', in: 'size:tree' })
+  // The divider has moved under the pointer, so it lets go over its own first column.
+  await ui.pointer({ type: 'up', x: 0, y: 3, button: 'left', in: 'size:tree' })
+  await ui.unmount()
+  // A new session reads the size back from the store.
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  const wider = await mount()
+  expect(await treeAt(wider)).toBe(57)
+
+  await wider.pointer({ type: 'down', x: 0, y: 3, button: 'left', in: 'size:tree' })
+  await wider.pointer({ type: 'up', x: -100, y: 3, button: 'left', in: 'size:tree' })
+  await wider.unmount()
+  const narrow = await mount()
+  expect(await treeAt(narrow)).toBe(24)
+  await narrow.unmount()
 })

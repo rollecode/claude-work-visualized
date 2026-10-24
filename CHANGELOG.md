@@ -1,3 +1,7 @@
+### 0.6.0: 2026-10-24
+
+* Add resizable side column and sections
+
 ### 0.5.7: 2026-10-20
 
 * Fix long thoughts hiding the newest lines

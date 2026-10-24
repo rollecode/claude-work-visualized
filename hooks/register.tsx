@@ -33,6 +33,14 @@ const PROGRESS_MS = 400 // how often a running copy's destination is measured
 const OUTPUT_LISTERS = new Set(['Bash', 'Grep', 'Glob', 'LS']) // tools whose output lines start with file paths
 /** How an edit's result shows in the chat: one line while the pane replays it, or the full diff. */
 type ChatDiffs = 'quiet' | 'full'
+const MIN_TREE = 24 // columns the tree keeps however far the divider is dragged
+const MIN_SIDE = 30 // columns the side column keeps
+/**
+ * Sizes the person dragged the sections to: beside the tree, its columns and the thinking's and git view's rows;
+ * stacked, the rows of the thinking and git view above the tree and of the code view under it.
+ */
+const SIZES = ['tree', 'think', 'git', 'stackThink', 'stackGit', 'code'] as const
+type Layout = Partial<Record<(typeof SIZES)[number], number>>
 
 const tree = atom({ plugin: 'work-visualized', key: 'tree' } as const, [] as TreeEntry[])
 const activity = atom({ plugin: 'work-visualized', key: 'activity' } as const, {} as Record<string, Activity>)
@@ -62,6 +70,7 @@ let isWatching = true // mirrors the watching atom for synchronous checks
 let home: string | undefined
 let chatDiffs: ChatDiffs = 'quiet'
 let prs: PrShown = 'shown'
+let layout: Layout = {}
 let scanning: Promise<unknown> = Promise.resolve()
 let lastListed: ReadonlySet<string> = new Set() // folders the last scan listed in full
 let changingCalls = 0 // tool calls that can change files, running now
@@ -372,6 +381,7 @@ export const register: Register = on => {
       description: 'Toggle full edit diffs in the chat while the work pane replays them',
     }).catch(() => undefined)
     chatDiffs = (await $.store.get('chatDiffs').catch(() => undefined)) === 'full' ? 'full' : 'quiet'
+    layout = layoutOf(await $.store.get('layout').catch(() => undefined))
     const now = await $.clock.now()
     const stored = await $.store.get('watching').catch(() => undefined)
     // The setting is shared by every session; a reload finds this session's pane still open.
@@ -687,8 +697,32 @@ export const register: Register = on => {
     return {}
   })
 
+  // A drag handle that fails falls back to the plain layout; say why instead of failing silently.
+  on('ui.fault', { component: 'Pane', requestId: PANE }, ($, e, next) => {
+    $.ui.log(`drag handle ${e.element} failed (${e.phase}): ${e.reason}`)
+    return next(e)
+  })
+
+  // A drag on the divider or a section's rule: `size:<which>` sets that size, kept for every session once let go.
+  on('ui.message', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const which = SIZES.find(s => e.element === `size:${s}`)
+    const data = e.data as { to?: unknown; done?: unknown } | null
+    if (which === undefined || typeof data?.to !== 'number' || !Number.isFinite(data.to)) {
+      return {}
+    }
+    layout = { ...layout, [which]: Math.round(data.to) }
+    $.ui.invalidate('ui.render')
+    if (data.done === true) {
+      await $.store.set('layout', layout).catch(() => undefined)
+    }
+    return {}
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box, Text } = els
+    // Surfaces without a Client (vscode, mobile) keep the default sizes.
+    const Client = 'Client' in els ? els.Client : undefined
     const now = await $.clock.now()
     const entries = await read($, tree)
     const act = await read($, activity)
@@ -726,13 +760,17 @@ export const register: Register = on => {
       </Box>
     )
     // `── label ─────`, a section rule; a plain rule when the label is empty.
-    const rule = (label: string, key: string, columns: number, c = FAINT) =>
-      line(
-        label === ''
-          ? [{ t: '─'.repeat(columns), c: FAINT }]
-          : [{ t: '── ', c: FAINT }, { t: label, c, b: true }, { t: ' ' + '─'.repeat(Math.max(0, columns - label.length - 4)), c: FAINT }],
-        key,
-      )
+    const ruleSegs = (label: string, columns: number, c = FAINT): Seg[] =>
+      label === ''
+        ? [{ t: '─'.repeat(columns), c: FAINT }]
+        : [{ t: '── ', c: FAINT }, { t: label, c, b: true }, { t: ' ' + '─'.repeat(Math.max(0, columns - label.length - 4)), c: FAINT }]
+    const rule = (label: string, key: string, columns: number, c = FAINT) => line(ruleSegs(label, columns, c), key)
+    /** A rule the person drags up or down: `size` names the section it resizes, `at` that section's rows, `dir` -1 when it is below the rule. */
+    type Grip = { size: Exclude<(typeof SIZES)[number], 'tree'>; at: number; dir?: -1 }
+    const gripRule = (segs: Seg[], key: string, grip?: Grip) =>
+      grip === undefined || Client === undefined
+        ? line(segs, key)
+        : <Client key={`size:${grip.size}`} module="./handle.tsx" height={1} props={{ axis: 'y', at: grip.at, dir: grip.dir ?? 1, rows: 1, segs: merge(segs), hot: MUTED, faint: FAINT }} />
     // The prompt line already says thinking while Claude thinks: the section then needs no title.
     const saysThinking = heldFocusOf(act, now) === undefined && info.doing === undefined && gitDoingOf(gs, now) === undefined && writing === undefined && info.phase === 'working'
 
@@ -762,15 +800,15 @@ export const register: Register = on => {
       return { els, rows: used, waited: think.waited }
     }
 
-    function gitSection(columns: number, rows: number) {
+    function gitSection(columns: number, rows: number, grip?: Grip) {
       const gv = gitView(gs, now, columns, rows, sessionRoot, prs)
       const used = gv.lines.length > 0 ? gv.lines.length + 1 : 0
-      const els = used === 0 ? [] : [rule(gv.label, 'rg', columns, mix(CLAUDE, FAINT, gv.fade)), ...gv.lines.map((segs, i) => line(segs, `git${i}`))]
+      const els = used === 0 ? [] : [gripRule(ruleSegs(gv.label, columns, mix(CLAUDE, FAINT, gv.fade)), 'rg', grip), ...gv.lines.map((segs, i) => line(segs, `git${i}`))]
       return { els, rows: used }
     }
 
     /** The code view's rule and rows, replaying the edit or showing where the person scrolled. */
-    function codeSection(columns: number, rows: number) {
+    function codeSection(columns: number, rows: number, grip?: Grip) {
       if (clip === undefined) return undefined
       let view: { from: number; to: number } | undefined
       let segs: Seg[][]
@@ -786,7 +824,7 @@ export const register: Register = on => {
       }
       return (
         <Box flexDirection="column" width={columns}>
-          {line(codeRule(clip, columns, view), 'cr')}
+          {gripRule(codeRule(clip, columns, view), 'cr', grip)}
           {segs.map((row, i) => line(row, `c${i}`))}
         </Box>
       )
@@ -797,36 +835,49 @@ export const register: Register = on => {
     const hasGit = gitView(gs, now, 40, 1, sessionRoot, prs).lines.length > 0
     const isSplit = paneColumns >= SPLIT_COLUMNS && (clip !== undefined || hasThinking || hasGit)
     if (isSplit) {
-      const treeColumns = Math.max(30, Math.min(48, Math.floor(paneColumns * 0.4)))
+      const treeColumns = clamp(layout.tree ?? Math.max(30, Math.min(48, Math.floor(paneColumns * 0.4))), MIN_TREE, paneColumns - 2 - MIN_SIDE)
       const sideColumns = paneColumns - treeColumns - 2
-      // Thinking takes the whole column when it is alone, half of it next to an edit or git.
+      // Thinking takes the whole column when it is alone, half of it next to an edit or git, or what the person dragged it to.
       const isShared = clip !== undefined || hasGit
-      const thinking = thinkingSection(sideColumns, Math.max(3, (isShared ? Math.floor(height / 2) : height) - 1), { column: treeColumns + 2, row: 0 }, 'beside')
-      const gitPart = gitSection(sideColumns, Math.max(4, clip === undefined ? height - 1 - thinking.rows : Math.floor(height * 0.25)))
+      const thinkRows = isShared && layout.think !== undefined ? clamp(layout.think, 4, height - 7) - 1 : Math.max(3, (isShared ? Math.floor(height / 2) : height) - 1)
+      const thinking = thinkingSection(sideColumns, thinkRows, { column: treeColumns + 2, row: 0 }, 'beside')
+      const gitShare = layout.git === undefined ? Math.floor(height * 0.25) : clamp(layout.git, 5, height - 5 - thinking.rows) - 1
+      const thinkGrip: Grip | undefined = thinking.rows > 0 ? { size: 'think', at: thinking.rows } : undefined
+      const gitPart = gitSection(sideColumns, Math.max(4, clip === undefined ? height - 1 - thinking.rows : gitShare), thinkGrip)
       const codeRows = Math.max(3, height - 1 - thinking.rows - gitPart.rows)
       codeArea = clip === undefined ? undefined : { column: treeColumns + 2, row: thinking.rows + gitPart.rows, columns: sideColumns, rows: codeRows + 1 }
+      const codeGrip: Grip | undefined = gitPart.rows > 0 ? { size: 'git', at: gitPart.rows } : thinkGrip
       return (
         <Box flexDirection="row" width={paneColumns} flexGrow={1}>
           {mapView(treeColumns, saysThinking ? thinking.waited : undefined)}
-          <Box width={2} />
+          {Client === undefined
+            ? <Box width={2} />
+            : <Client key="size:tree" module="./handle.tsx" width={2} height={height} props={{ axis: 'x', at: treeColumns, rows: height, segs: [], hot: MUTED, faint: FAINT }} />}
           <Box flexDirection="column" width={sideColumns}>
             {thinking.els}
             {gitPart.els}
-            {codeSection(sideColumns, codeRows)}
+            {codeSection(sideColumns, codeRows, codeGrip)}
           </Box>
         </Box>
       )
     }
 
-    const thinking = thinkingSection(paneColumns, thoughtRows(height), { column: 0, row: 2 }, 'stacked')
-    const gitPart = gitSection(paneColumns, gitRows(height))
-    const codeRows = clip === undefined ? 0 : Math.max(3, Math.min(Math.max(clip.before.length, clip.after.length) + 2, Math.floor(height * 0.45)))
+    // Stacked, the rule under a section resizes it, and the code view's rule the code view under it.
+    const stackThink = layout.stackThink === undefined ? thoughtRows(height) : clamp(layout.stackThink, 4, height - 10) - 1
+    const thinking = thinkingSection(paneColumns, stackThink, { column: 0, row: 2 }, 'stacked')
+    const stackGit = layout.stackGit === undefined ? gitRows(height) : clamp(layout.stackGit, 5, height - 10 - thinking.rows) - 1
+    const thinkGrip: Grip | undefined = thinking.rows > 0 ? { size: 'stackThink', at: thinking.rows } : undefined
+    const gitPart = gitSection(paneColumns, stackGit, thinkGrip)
+    const fitted = clip === undefined ? 0 : Math.max(clip.before.length, clip.after.length) + 2
+    const codeRows = clip === undefined ? 0 : layout.code === undefined ? Math.max(3, Math.min(fitted, Math.floor(height * 0.45))) : clamp(layout.code, 3, Math.floor(height * 0.7))
     codeArea = clip === undefined ? undefined : { column: 0, row: 0, columns: paneColumns, rows: codeRows + 1 }
     const above = { els: [...thinking.els, ...gitPart.els], rows: thinking.rows + gitPart.rows }
-    return mapView(paneColumns, saysThinking ? thinking.waited : undefined, above, codeSection(paneColumns, codeRows), clip === undefined ? 0 : codeRows + 1)
+    const treeGrip: Grip | undefined = gitPart.rows > 0 ? { size: 'stackGit', at: gitPart.rows } : thinkGrip
+    const codeGrip: Grip = { size: 'code', at: codeRows, dir: -1 }
+    return mapView(paneColumns, saysThinking ? thinking.waited : undefined, above, codeSection(paneColumns, codeRows, codeGrip), clip === undefined ? 0 : codeRows + 1, treeGrip)
 
     /** The tree with its header, status, summary card and legend; `over` goes above the tree, `under` below it. */
-    function mapView(columns: number, waited?: number, over = { els: [] as RenderChildren[], rows: 0 }, under?: RenderChildren, underRows = 0) {
+    function mapView(columns: number, waited?: number, over = { els: [] as RenderChildren[], rows: 0 }, under?: RenderChildren, underRows = 0, grip?: Grip) {
       const rows = buildRows({ tree: entries, activity: act, ghosts: gh, now, columns, folders })
       const summary = summaryLines(info, now, columns - 4)
       const legend = legendLines(columns)
@@ -838,9 +889,12 @@ export const register: Register = on => {
       const above = scroll
       const below = Math.max(0, rows.length - scroll - room)
       const fileCount = entries.filter(t => !t.d).length
-      // Under the tree, the code view starts below the header, the tree and the card.
+      // Under the tree, the code view starts below the header, the tree and the card; once resized it sits on the legend,
+      // so its rule follows the pointer.
+      const isDocked = layout.code !== undefined
       if (under !== undefined && codeArea !== undefined) {
-        codeArea = { ...codeArea, row: 3 + over.rows + visible.length + (below > 0 ? 1 : 0) + (summary.length > 0 ? summary.length + 2 : 0) }
+        const row = isDocked ? height - 1 - legend.length - underRows : 3 + over.rows + visible.length + (below > 0 ? 1 : 0) + (summary.length > 0 ? summary.length + 2 : 0)
+        codeArea = { ...codeArea, row }
       }
       const age = now - info.at
       const card = Math.min(smoothIn(age / 500), info.phase === 'complete' && age > T.summary - 1500 ? Math.max(0, (T.summary - age) / 1500) : 1)
@@ -850,7 +904,7 @@ export const register: Register = on => {
           {line(headerLine(now, focus !== undefined || info.phase === 'working', root, remoteOf(act, now)), 'h')}
           {line(statusLine(act, info, now, fileCount, columns, { waited, git: gitDoingOf(gs, now), writing }), 's')}
           {over.els}
-          {rule(above > 0 ? `tree ↑${above}` : 'tree', 'r1', columns)}
+          {gripRule(ruleSegs(above > 0 ? `tree ↑${above}` : 'tree', columns), 'r1', grip)}
           {rows.length === 0 ? line([{ t: ' scanning…', c: MUTED }], 'empty') : visible.map(r => line(r.segs, r.key))}
           {below > 0 && line([{ t: `   ↓ ${below} more`, c: FAINT }], 'down')}
           {summary.length > 0 && (
@@ -858,8 +912,9 @@ export const register: Register = on => {
               {summary.map((segs, i) => line(segs, `sum${i}`))}
             </Box>
           )}
-          {under}
+          {!isDocked && under}
           <Box flexGrow={1} />
+          {isDocked && under}
           {rule('legend', 'r2', columns)}
           {legend.map((segs, i) => line(segs, `leg${i}`))}
         </Box>
@@ -885,6 +940,20 @@ function merge(segs: readonly Seg[]): Seg[] {
     if (last && last.c === s.c && last.bg === s.bg && !!last.b === !!s.b && !!last.dim === !!s.dim && !!last.s === !!s.s) {
       out[out.length - 1] = { ...last, t: last.t + s.t }
     } else out.push(s)
+  }
+  return out
+}
+
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
+
+/** The stored layout, keeping only sizes that are numbers. */
+function layoutOf(stored: unknown): Layout {
+  const out: Layout = {}
+  for (const s of SIZES) {
+    const n = (stored as Record<string, unknown> | null | undefined)?.[s]
+    if (typeof n === 'number' && Number.isFinite(n)) {
+      out[s] = n
+    }
   }
   return out
 }

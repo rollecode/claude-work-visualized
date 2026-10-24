@@ -130,6 +130,15 @@ hooks' worker Prism would otherwise answer the engine's messages.
 
 From 84 columns thinking, the git graph and the code view sit beside the tree, stacked in that order; narrower, thinking and git go above the tree and the code view under it.
 
+The layout can be dragged. `hooks/handle.tsx` is a `Client` drawn as the 2-column gap beside the
+tree (`size:tree`) and as section rules: beside the tree the rules of the git graph and the code
+view (`size:think`, `size:git`: the section above the rule); stacked, the rules of the git graph and
+the tree (`size:stackThink`, `size:stackGit`) and the code view's (`size:code`, the section below it,
+so its `dir` is -1; once resized it sits on the legend, so its rule follows the pointer). Its props carry the size as drawn (`at`); a drag posts `{ to }`, `at` plus
+how far the pointer moved, and `{ to, done }` when the button comes up. The `ui.message` hook keeps
+it in `layout`, clamped at drawing time, and saves it to `$.store` on `done`. Surfaces without a
+`Client` keep the default sizes.
+
 A clip also keeps the whole file after the edit (`file`) and the lines it changed (`changed`). A
 `ui.scroll` hook takes the person's wheel, touchpad and scroll keys over the code view:
 `browseAfter()` moves a top line through the file (2 lines a tick, 1 a key) and `fileLines()`

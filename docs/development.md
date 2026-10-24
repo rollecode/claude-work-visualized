@@ -12,6 +12,7 @@ claude-work-visualized/
 │   ├── register.tsx             hooks: tool calls, scanning, /watch, timers, the pane
 │   ├── model.ts                 pure logic: command parsing, scan diffs, the animation engine
 │   ├── code.ts                  pure logic of the code view: line diff and edit replay
+│   ├── handle.tsx               Client module: the drag handles that resize the side column
 │   ├── vendor/prism.js          Prism syntax highlighter, bundled as one module
 │   ├── work.test.tsx            tests
 │   └── code.test.tsx            tests of the code view

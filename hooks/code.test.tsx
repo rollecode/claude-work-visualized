@@ -123,7 +123,8 @@ test('an Edit replays in the pane under the tree', async ($, on) => {
     props: { title: 'Claude Work', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
   })
   const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
-  expect(shown).toContain('a.ts:1')
+  // The code view's rule is a drag handle, drawn by its own Client.
+  expect((await ui.findAll({ type: 'Text', in: 'size:code' })).map(x => x.text).join('')).toContain('a.ts:1')
   expect(shown).toContain('const a = 1')
   await ui.unmount()
 })
@@ -225,4 +226,94 @@ test('a scroll over the code view moves the file, one over the tree moves the pa
   expect(first?.top).toBe(clip.first - 1 + 2) // a touchpad tick moves two lines
   expect(browseAfter(first, clip, area, { by: -1 }, 2)?.top).toBe(clip.first - 1 + 1) // a key moves one
   expect(browseAfter(first, clip, area, { by: -999, pointer: { column: 50, row: 2 } }, 3)?.top).toBe(0)
+})
+
+test('dragging the code view\'s rule gives the thinking above it more rows', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  const disk: Record<string, string> = { '/proj/a.ts': 'const a = 1\nconst b = 2\n' }
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', ($, e) =>
+    ({ value: e.path === ROOT ? [{ name: 'a.ts', kind: 'file', size: 1, mtimeMs: 1, isLink: false }] : [] }) as never,
+  )
+  on('fs.stat', ($, e) => ({ value: { kind: 'file', size: (disk[e.path] ?? '').length, mtimeMs: 1, isLink: false } }) as never)
+  on('fs.read', ($, e) => (disk[e.path] === undefined ? { deny: 'missing' } : { value: disk[e.path] }) as never)
+  on('tool.call', { tool: 'Edit' }, () => {
+    disk['/proj/a.ts'] = 'const a = 1\nconst b = 3\n'
+    return { result: {} } as never
+  })
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('turn.step', async function* () {
+    yield { kind: 'thinking', index: 0, text: 'more '.repeat(600) }
+    return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 })
+  for (let step = await stream.next(); step.done !== true; step = await stream.next()) {}
+
+  const mount = () => $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  const typing = await mount()
+  await clock.advance(15_000)
+  await typing.unmount()
+  await $.tool.call({ tool: 'Edit', file_path: '/proj/a.ts', old_string: 'b = 2', new_string: 'b = 3' } as never)
+  const thinkAt = async (ui: Awaited<ReturnType<typeof mount>>) => ((await ui.find({ key: 'size:think' }))?.props as { props?: { at?: number } } | undefined)?.props?.at
+
+  const ui = await mount()
+  expect(await thinkAt(ui)).toBe(15)
+  await ui.pointer({ type: 'down', x: 5, y: 0, button: 'left', in: 'size:think' })
+  await ui.pointer({ type: 'up', x: 5, y: 4, button: 'left', in: 'size:think' })
+  await ui.unmount()
+  const taller = await mount()
+  expect(await thinkAt(taller)).toBe(19)
+  expect((await taller.findAll({ type: 'Text', in: 'size:think' })).map(x => x.text).join('')).toContain('a.ts:1')
+  await taller.unmount()
+})
+
+test('in a narrow pane, dragging the code view\'s rule up gives it more rows', async ($, on) => {
+  mock.clock(on, { now: 10_000 })
+  mock.store(on)
+  const disk: Record<string, string> = { '/proj/a.ts': 'const a = 1\nconst b = 2\n' }
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.start', () => ({ cwd: ROOT }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('fs.list', ($, e) =>
+    ({ value: e.path === ROOT ? [{ name: 'a.ts', kind: 'file', size: 1, mtimeMs: 1, isLink: false }] : [] }) as never,
+  )
+  on('fs.stat', ($, e) => ({ value: { kind: 'file', size: (disk[e.path] ?? '').length, mtimeMs: 1, isLink: false } }) as never)
+  on('fs.read', ($, e) => (disk[e.path] === undefined ? { deny: 'missing' } : { value: disk[e.path] }) as never)
+  on('tool.call', { tool: 'Edit' }, () => {
+    disk['/proj/a.ts'] = 'const a = 1\nconst b = 3\n'
+    return { result: {} } as never
+  })
+  on('ui.open', () => ({ value: {} }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  await $.tool.call({ tool: 'Edit', file_path: '/proj/a.ts', old_string: 'b = 2', new_string: 'b = 3' } as never)
+
+  const mount = () => $.ui.mount({
+    plugin: 'work-visualized',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'work-map',
+    props: { title: 'Claude Work', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  const codeAt = async (ui: Awaited<ReturnType<typeof mount>>) => ((await ui.find({ key: 'size:code' }))?.props as { props?: { at?: number } } | undefined)?.props?.at
+
+  const ui = await mount()
+  expect(await codeAt(ui)).toBe(4)
+  await ui.pointer({ type: 'down', x: 5, y: 0, button: 'left', in: 'size:code' })
+  await ui.pointer({ type: 'up', x: 5, y: -6, button: 'left', in: 'size:code' })
+  await ui.unmount()
+  const taller = await mount()
+  expect(await codeAt(taller)).toBe(10)
+  await taller.unmount()
 })
