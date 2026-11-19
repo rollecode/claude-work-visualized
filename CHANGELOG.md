@@ -1,3 +1,7 @@
+### 0.7.0: 2026-11-19
+
+* Type each shell command into the code view
+
 ### 0.6.0: 2026-10-24
 
 * Add resizable side column and sections

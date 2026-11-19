@@ -46,6 +46,8 @@ export type Clip = {
   file: string[]
   /** Line numbers (from 1) the edit added or changed. */
   changed: number[]
+  /** A shell command typed in, rather than a file's change. */
+  command?: true
 }
 
 /** The turn's thinking so far: each block a paragraph, the one streaming now last. */

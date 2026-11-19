@@ -284,7 +284,7 @@ test('a for loop runs its body once per value', async () => {
 })
 
 test('a sed edit in another project shows in the tree and replays in the code view', async ($, on) => {
-  mock.clock(on, { now: 10_000 })
+  const clock = mock.clock(on, { now: 10_000 })
   mock.store(on)
   mock.env(on, { HOME: '/home/u' })
   const disk: Record<string, string> = { '/home/u/other/inc/hooks.php': '<?php\n$id = $term->term_id;\n' }
@@ -316,6 +316,8 @@ test('a sed edit in another project shows in the tree and replays in the code vi
   const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
   expect(shown).toContain('~:/')
   expect(shown).toContain('hooks.php')
+  // The command types in first, then the file it changed.
+  await clock.advance(4_000)
   // The code view's rule is a drag handle, drawn by its own Client.
   expect((await ui.findAll({ type: 'Text', in: 'size:code' })).map(x => x.text).join('')).toContain('~:/other/inc/hooks.php:1')
   await ui.unmount()
@@ -328,7 +330,7 @@ test('files a script names are checked, so a heredoc that rewrites one is caught
 })
 
 test('a changelog rewritten by a python heredoc replays in the code view', async ($, on) => {
-  mock.clock(on, { now: 10_000 })
+  const clock = mock.clock(on, { now: 10_000 })
   mock.store(on)
   mock.env(on, { HOME: '/home/u' })
   const disk: Record<string, string> = { '/home/u/site/CHANGELOG.md': '### alpha\n\n* beta\n' }
@@ -358,10 +360,10 @@ test('a changelog rewritten by a python heredoc replays in the code view', async
     requestId: 'work-map',
     props: { title: 'Claude Work', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 34 }, view: {} },
   })
-  const shown = (await ui.findAll({ type: 'Text' })).map(x => x.text).join('')
-  // The code view's rule is a drag handle, drawn by its own Client.
+  expect((await ui.findAll({ type: 'Text' })).map(x => x.text).join('')).toContain('CHANGELOG.md')
+  // The command types in first, then the file it changed. The code view's rule is a drag handle, drawn by its own Client.
+  await clock.advance(4_000)
   expect((await ui.findAll({ type: 'Text', in: 'size:code' })).map(x => x.text).join('')).toContain('~:/site/CHANGELOG.md:1')
-  expect(shown).toContain('CHANGELOG.md')
   await ui.unmount()
 })
 

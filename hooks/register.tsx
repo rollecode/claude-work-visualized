@@ -3,7 +3,7 @@ import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Activity, Clip, Ghost, GitAction, GitState, Op, Thought, TreeEntry, TurnInfo } from '../types'
 import {
-  HOLD, MAX_BYTES, WHEEL_LINES, browseAfter, clipKey, clipOf, codeLines, codeRule, currentClip, enqueue, fileLines, isClipDone, isOverCode, patchStats,
+  HOLD, MAX_BYTES, WHEEL_LINES, browseAfter, clipKey, clipOf, codeLines, commandClip, codeRule, currentClip, enqueue, fileLines, isClipDone, isOverCode, patchStats,
 } from './code'
 import type { Browse, CodeArea } from './code'
 import {
@@ -569,6 +569,10 @@ export const register: Register = on => {
       const first = targets[targets.length - 1]
       if (first) setStatus($, `${ICON[first.op]} ${LABEL[first.op]} ${first.path}`)
     }
+
+    // The command itself types into the code view, since the chat cuts long ones short.
+    const command = tool === 'Bash' && typeof input['command'] === 'string' ? commandClip(typeof input['description'] === 'string' ? input['description'] : 'shell', input['command'], startedAt) : undefined
+    if (command !== undefined) await update($, clips, list => enqueue(list, command, startedAt))
 
     const replays = await replaysOf($, tool, input, targets, cwd)
     const befores = await Promise.all(replays.map(t => textBefore($, t.file ?? '', t)))

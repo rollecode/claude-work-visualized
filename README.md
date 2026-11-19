@@ -30,6 +30,7 @@ Install the Claude Code plugin from https://github.com/rollecode/claude-work-vis
 - **Prompt line.** Shows what Claude is doing, on which path and for how long. A call that touches no file (`df -h`, a test run, a web search, an MCP tool) shows as `running …` while it runs.
 - **Progress.** A running copy or download (`cp`, `rsync`, `scp`, `dd`, `curl -o`, `wget -O`, a `>` redirect) shows how far it has got: a percentage and a filling bar when the source size is known, otherwise the bytes landed so far.
 - **Searches and globs.** Files a command's output lists (`grep -rl`, `find`, `ls`) flash as read, and a glob (`wc -l src/*.ts`, `sed -i … *.md`) lights each file it matches.
+- **Commands.** Each shell command Claude runs types itself into the code view in full, highlighted as shell and named by its description, before the files it changes replay. The chat cuts long commands short; the pane shows all of it.
 - **Code view.** Each `Edit` and `Write`, and each file a shell command changes (`sed -i`, `>`, `tee`, a script that rewrites a file it names), is replayed as keystrokes: replaced lines turn red and fold away, new lines type in behind a caret, and gutter marks stay for a while. Highlighting covers about 60 languages through Prism, in Tokyo Night colours.
 - **Quiet chat.** While the pane is shown, an edit's result in the chat is one line (`± Edited src/app.ts +3 -1`), because the pane already shows the diff.
 - **Remote work.** Files touched over `ssh`, `scp` and `rsync` show under a folder per host (`deploy@web1:/etc/nginx/…`), and the header names the host Claude is working on.
@@ -90,7 +91,7 @@ The pane works best when the chat stays short. The GIF above runs with these in 
 }
 ```
 
-`verbose: false` keeps tool output collapsed to one line (`Ctrl+O` still opens the full transcript), and `bashEditDiffEnabled: false` stops Claude Code from printing a diff after each shell command that changes files. Claude Code turns that diff on by default in auto mode.
+`verbose: false` keeps tool output collapsed to one line, since the pane shows each command and each change in full (`Ctrl+O` still opens the full transcript), and `bashEditDiffEnabled: false` stops Claude Code from printing a diff after each shell command that changes files. Claude Code turns that diff on by default in auto mode.
 
 ## Usage
 

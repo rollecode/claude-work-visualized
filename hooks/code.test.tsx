@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HOLD, browseAfter, cellSafe, clipOf, codeLines, coloursOf, currentClip, enqueue, fileLines, frameOf, grammarOf, hunksOf, isOverCode } from './code'
+import { HOLD, browseAfter, cellSafe, clipOf, codeLines, codeRule, commandClip, coloursOf, currentClip, enqueue, fileLines, frameOf, grammarOf, hunksOf, isOverCode } from './code'
 
 const ROOT = '/proj'
 const lines = (n: number, f = (i: number) => `line ${i}`) => Array.from({ length: n }, (_, i) => f(i + 1)).join('\n') + '\n'
@@ -316,4 +316,14 @@ test('in a narrow pane, dragging the code view\'s rule up gives it more rows', a
   const taller = await mount()
   expect(await codeAt(taller)).toBe(10)
   await taller.unmount()
+})
+
+test('a shell command types in as its own clip, highlighted as shell', async () => {
+  const clip = commandClip('Check pages', 'for u in a b; do\n  curl -s "$u"\ndone\n', 0)
+  expect(clip?.command).toBe(true)
+  expect(clip?.after).toEqual(['for u in a b; do', '  curl -s "$u"', 'done'])
+  expect(text(codeRule(clip!, 60))).toContain('❯ Check pages')
+  expect(text(codeRule(clip!, 60))).not.toContain('+3')
+  expect(new Set(coloursOf('for u in a b; do', 'bash')).size).toBeGreaterThan(1)
+  expect(commandClip('shell', '  ', 0)).toBe(undefined)
 })

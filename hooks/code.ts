@@ -204,6 +204,14 @@ export function clipOf(path: string, before: string, after: string, at: number):
   }
 }
 
+/** A shell command as a clip, typed in like a new file; `label` names it in the rule. */
+export function commandClip(label: string, command: string, at: number): Clip | undefined {
+  const clip = clipOf(label, '', command.trim(), at)
+  return clip === undefined ? undefined : { ...clip, command: true }
+}
+
+const grammarFor = (clip: Clip) => (clip.command ? 'bash' : grammarOf(clip.path))
+
 export const clipKey = (clip: Clip) => `${clip.path}\n${clip.at}`
 
 /** Queues a clip behind those still playing, unless it would fall too far behind. */
@@ -506,19 +514,19 @@ const smooth = (t: number) => {
 export function codeRule(clip: Clip, columns: number, view?: { from: number; to: number }): Seg[] {
   const isNew = clip.first === 1 && clip.before.length === 0
   const op = isNew ? 'create' : 'edit'
-  const where = view === undefined ? `:${clip.first}` : ''
-  const stats = view === undefined ? `  +${clip.adds}` + (clip.dels > 0 ? ` -${clip.dels}` : '') : `  lines ${view.from}-${view.to} / ${clip.file.length}`
+  const where = view === undefined && clip.command !== true ? `:${clip.first}` : ''
+  const stats = view !== undefined ? `  lines ${view.from}-${view.to} / ${clip.file.length}` : clip.command ? '' : `  +${clip.adds}` + (clip.dels > 0 ? ` -${clip.dels}` : '')
   const room = Math.max(4, columns - 3 - 2 - where.length - stats.length - 2)
   const path = clip.path.length > room ? '…' + clip.path.slice(clip.path.length - room + 1) : clip.path
   const segs: Seg[] = [
     { t: '── ', c: FAINT },
-    { t: ICON[op] + ' ', c: COLOR[op], b: true },
+    clip.command ? { t: '❯ ', c: COLOR.view, b: true } : { t: ICON[op] + ' ', c: COLOR[op], b: true },
     { t: path, c: BASE, b: true },
     { t: where, c: MUTED },
   ]
   if (view !== undefined) {
     segs.push({ t: stats, c: MUTED })
-  } else {
+  } else if (!clip.command) {
     segs.push({ t: `  +${clip.adds}`, c: COLOR.create })
     if (clip.dels > 0) segs.push({ t: ` -${clip.dels}`, c: COLOR.delete })
   }
@@ -548,7 +556,7 @@ export function codeLines(clip: Clip, now: number, columns: number, rows: number
     offset += r.t.length + 1
     return at
   })
-  const colours = coloursOf(frame.rows.map(r => r.t).join('\n'), grammarOf(clip.path))
+  const colours = coloursOf(frame.rows.map(r => r.t).join('\n'), grammarFor(clip))
 
   // Line numbers count the file as it is now, so removed lines get none.
   let no = clip.first
@@ -670,7 +678,7 @@ export function fileLines(clip: Clip, columns: number, rows: number, top: number
   const first = clamp(Math.round(top), 0, Math.max(0, lines.length - rows))
   const from = Math.max(0, first - COLOUR_MARGIN)
   const slice = lines.slice(from, Math.min(lines.length, first + rows + COLOUR_MARGIN))
-  const colours = coloursOf(slice.join('\n'), grammarOf(clip.path))
+  const colours = coloursOf(slice.join('\n'), grammarFor(clip))
   const changed = new Set(clip.changed)
 
   const out: Seg[][] = []
