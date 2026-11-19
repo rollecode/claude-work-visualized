@@ -228,7 +228,7 @@ test('a scroll over the code view moves the file, one over the tree moves the pa
   expect(browseAfter(first, clip, area, { by: -999, pointer: { column: 50, row: 2 } }, 3)?.top).toBe(0)
 })
 
-test('dragging the code view\'s rule gives the thinking above it more rows', async ($, on) => {
+test('the code view takes only the rows it needs, and dragging its rule resizes the thinking above', async ($, on) => {
   const clock = mock.clock(on, { now: 10_000 })
   mock.store(on)
   const disk: Record<string, string> = { '/proj/a.ts': 'const a = 1\nconst b = 2\n' }
@@ -268,12 +268,14 @@ test('dragging the code view\'s rule gives the thinking above it more rows', asy
   const thinkAt = async (ui: Awaited<ReturnType<typeof mount>>) => ((await ui.find({ key: 'size:think' }))?.props as { props?: { at?: number } } | undefined)?.props?.at
 
   const ui = await mount()
-  expect(await thinkAt(ui)).toBe(15)
+  // A two-line edit needs few rows, so thinking keeps the rest of the column.
+  const before = await thinkAt(ui)
+  expect(before).toBeGreaterThan(20)
   await ui.pointer({ type: 'down', x: 5, y: 0, button: 'left', in: 'size:think' })
-  await ui.pointer({ type: 'up', x: 5, y: 4, button: 'left', in: 'size:think' })
+  await ui.pointer({ type: 'up', x: 5, y: -8, button: 'left', in: 'size:think' })
   await ui.unmount()
   const taller = await mount()
-  expect(await thinkAt(taller)).toBe(19)
+  expect(await thinkAt(taller)).toBe(before! - 8)
   expect((await taller.findAll({ type: 'Text', in: 'size:think' })).map(x => x.text).join('')).toContain('a.ts:1')
   await taller.unmount()
 })

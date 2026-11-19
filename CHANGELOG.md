@@ -1,3 +1,7 @@
+### 0.7.1: 2026-11-19
+
+* Give the code view room before thinking
+
 ### 0.7.0: 2026-11-19
 
 * Type each shell command into the code view

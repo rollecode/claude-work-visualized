@@ -841,13 +841,16 @@ export const register: Register = on => {
     if (isSplit) {
       const treeColumns = clamp(layout.tree ?? Math.max(30, Math.min(48, Math.floor(paneColumns * 0.4))), MIN_TREE, paneColumns - 2 - MIN_SIDE)
       const sideColumns = paneColumns - treeColumns - 2
-      // Thinking takes the whole column when it is alone, half of it next to an edit or git, or what the person dragged it to.
+      // Thinking takes the whole column when it is alone, or what the person dragged it to. Beside an edit or a command,
+      // the code view gets the rows it needs first, up to most of the column, and thinking what is left.
       const isShared = clip !== undefined || hasGit
-      const thinkRows = isShared && layout.think !== undefined ? clamp(layout.think, 4, height - 7) - 1 : Math.max(3, (isShared ? Math.floor(height / 2) : height) - 1)
+      const gitShare = layout.git === undefined ? Math.floor(height * 0.25) : clamp(layout.git, 5, height - 5) - 1
+      const codeWant = clip === undefined ? 0 : Math.min(Math.max(clip.before.length, clip.after.length) + 1, Math.floor(height * 0.65))
+      const thinkFree = clip === undefined ? Math.floor(height / 2) : height - codeWant - (hasGit ? gitShare + 1 : 0)
+      const thinkRows = isShared && layout.think !== undefined ? clamp(layout.think, 4, height - 7) - 1 : Math.max(3, (isShared ? Math.max(5, thinkFree) : height) - 1)
       const thinking = thinkingSection(sideColumns, thinkRows, { column: treeColumns + 2, row: 0 }, 'beside')
-      const gitShare = layout.git === undefined ? Math.floor(height * 0.25) : clamp(layout.git, 5, height - 5 - thinking.rows) - 1
       const thinkGrip: Grip | undefined = thinking.rows > 0 ? { size: 'think', at: thinking.rows } : undefined
-      const gitPart = gitSection(sideColumns, Math.max(4, clip === undefined ? height - 1 - thinking.rows : gitShare), thinkGrip)
+      const gitPart = gitSection(sideColumns, Math.max(4, clip === undefined ? height - 1 - thinking.rows : Math.min(gitShare, height - 5 - thinking.rows)), thinkGrip)
       const codeRows = Math.max(3, height - 1 - thinking.rows - gitPart.rows)
       codeArea = clip === undefined ? undefined : { column: treeColumns + 2, row: thinking.rows + gitPart.rows, columns: sideColumns, rows: codeRows + 1 }
       const codeGrip: Grip | undefined = gitPart.rows > 0 ? { size: 'git', at: gitPart.rows } : thinkGrip
@@ -873,7 +876,7 @@ export const register: Register = on => {
     const thinkGrip: Grip | undefined = thinking.rows > 0 ? { size: 'stackThink', at: thinking.rows } : undefined
     const gitPart = gitSection(paneColumns, stackGit, thinkGrip)
     const fitted = clip === undefined ? 0 : Math.max(clip.before.length, clip.after.length) + 2
-    const codeRows = clip === undefined ? 0 : layout.code === undefined ? Math.max(3, Math.min(fitted, Math.floor(height * 0.45))) : clamp(layout.code, 3, Math.floor(height * 0.7))
+    const codeRows = clip === undefined ? 0 : layout.code === undefined ? Math.max(3, Math.min(fitted, Math.floor(height * 0.6))) : clamp(layout.code, 3, Math.floor(height * 0.7))
     codeArea = clip === undefined ? undefined : { column: 0, row: 0, columns: paneColumns, rows: codeRows + 1 }
     const above = { els: [...thinking.els, ...gitPart.els], rows: thinking.rows + gitPart.rows }
     const treeGrip: Grip | undefined = gitPart.rows > 0 ? { size: 'stackGit', at: gitPart.rows } : thinkGrip
